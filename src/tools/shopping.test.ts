@@ -24,6 +24,7 @@ vi.mock("../store.js", () => ({
 
 const api = await import("../api.js");
 const store = await import("../store.js");
+const { buildShoppingListResult } = await import("./shopping-list.js");
 const { registerShoppingTools } = await import("./shopping.js");
 
 const NOW = new Date("2026-06-15T12:00:00Z");
@@ -78,6 +79,10 @@ function beefRecipe(overrides: Partial<Recipe> = {}): Recipe {
 }
 
 const beefDeals = () => new Map([["hakket oksekød", [makeOffer()]]]);
+
+function toMinorUnits(amount: number): number {
+  return Math.round(amount * 100);
+}
 
 let stub: ServerStub;
 
@@ -205,10 +210,11 @@ describe("generate_shopping_list", () => {
   });
 
   it("aggregates a shared ingredient across recipes and shows the arithmetic", async () => {
-    vi.mocked(store.getRecipes).mockResolvedValue([
+    const recipes = [
       beefRecipe({ name: "Bolognese" }),
       beefRecipe({ name: "Chili", cuisineType: "mexican" }),
-    ]);
+    ];
+    vi.mocked(store.getRecipes).mockResolvedValue(recipes);
     vi.mocked(api.searchDealsBatch).mockResolvedValue(beefDeals());
 
     const text = textOf(
@@ -220,6 +226,23 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("need 250 g + 250 g = 500 g");
     // One 500 g pack covers both recipes.
     expect(text).toContain("-> 45 kr = 45 kr");
+
+    const result = await buildShoppingListResult(recipes, 2);
+    expect(result.matchSummary).toEqual({
+      eligibleItemCount: 1,
+      confirmedMatchCount: 1,
+      lowConfidenceMatchCount: 0,
+      unmatchedItemCount: 0,
+      confirmedCoveragePercent: 100,
+      candidateCoveragePercent: 100,
+    });
+    expect(result.priceSummary).toEqual({
+      confirmedPurchaseSubtotal: 45,
+      uncertainPurchaseSubtotal: 0,
+      matchedPurchaseSubtotal: 45,
+      currency: "DKK",
+    });
+    expect(result.grandTotal).toBe(45);
   });
 
   it("keeps Tomatrisotto's fractional lemon requirement separate from purchase quantity", async () => {
@@ -324,7 +347,7 @@ describe("generate_shopping_list", () => {
   });
 
   it("puts unmatched ingredients in the regular-price section with their source recipes", async () => {
-    vi.mocked(store.getRecipes).mockResolvedValue([
+    const recipes = [
       beefRecipe({
         ingredients: [
           {
@@ -335,7 +358,8 @@ describe("generate_shopping_list", () => {
           },
         ],
       }),
-    ]);
+    ];
+    vi.mocked(store.getRecipes).mockResolvedValue(recipes);
     const text = textOf(
       await callTool(stub, "generate_shopping_list", {
         recipes: ["Bolognese"],
@@ -344,6 +368,18 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("## Buy at regular price (1 items)");
     expect(text).toContain("- Enhjørning (0.5 stk) [Bolognese]");
     expect(text).toContain("Estimated register total (deals only): ~0 kr");
+
+    const result = await buildShoppingListResult(recipes, 2);
+    expect(result.matchSummary).toEqual({
+      eligibleItemCount: 1,
+      confirmedMatchCount: 0,
+      lowConfidenceMatchCount: 0,
+      unmatchedItemCount: 1,
+      confirmedCoveragePercent: 0,
+      candidateCoveragePercent: 0,
+    });
+    expect(result.priceSummary.matchedPurchaseSubtotal).toBe(0);
+    expect(result.grandTotal).toBe(0);
   });
 
   it("skips pantry ingredients and names them at the bottom", async () => {
@@ -421,6 +457,28 @@ describe("generate_shopping_list", () => {
       }),
     );
     expect(text).toBe("All ingredients are in your pantry. Nothing to buy!");
+
+    const result = await buildShoppingListResult(
+      [
+        beefRecipe({
+          ingredients: [
+            {
+              name: "Salt",
+              quantity: "1 tsk",
+              searchTerms: ["salt"],
+              category: "pantry",
+            },
+          ],
+        }),
+      ],
+      2,
+    );
+    expect(result.matchSummary).toMatchObject({
+      eligibleItemCount: 0,
+      confirmedCoveragePercent: 100,
+      candidateCoveragePercent: 100,
+    });
+    expect(result.priceSummary.matchedPurchaseSubtotal).toBe(0);
   });
 
   it("raises a buy-first section for deals expiring within two days", async () => {
@@ -483,6 +541,108 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("## ⚠ Uncertain matches (verify these)");
     expect(text).toContain('Mælk: picked "Øko mælk eller fløde" but also found:');
     expect(text).toContain("Sød mælk eller kærnemælk");
+  });
+
+  it("counts a single-candidate low-confidence match and its pack cost", async () => {
+    const recipes = [
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Mælk",
+            quantity: "5 dl",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+        ],
+      }),
+    ];
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "mælk",
+          [
+            makeOffer({
+              id: "milk",
+              heading: "Øko mælk eller fløde",
+              price: 12,
+              quantity: 1,
+              unit: "l",
+            }),
+          ],
+        ],
+      ]),
+    );
+
+    const result = await buildShoppingListResult(recipes, 2);
+
+    expect(result.matchSummary).toEqual({
+      eligibleItemCount: 1,
+      confirmedMatchCount: 0,
+      lowConfidenceMatchCount: 1,
+      unmatchedItemCount: 0,
+      confirmedCoveragePercent: 0,
+      candidateCoveragePercent: 100,
+    });
+    expect(result.priceSummary).toEqual({
+      confirmedPurchaseSubtotal: 0,
+      uncertainPurchaseSubtotal: 12,
+      matchedPurchaseSubtotal: 12,
+      currency: "DKK",
+    });
+    expect(result.grandTotal).toBe(12);
+    expect(result.text).toContain("= 12 kr");
+    expect(result.text).toContain("⚠");
+  });
+
+  it("keeps ordered half-cent sticker fallbacks aligned with legacy grandTotal", async () => {
+    const recipes = [
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Hvidløg",
+            quantity: "3 fed",
+            searchTerms: ["hvidløg"],
+            category: "produce",
+          },
+          {
+            name: "Mælk",
+            quantity: "3 fed",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+          {
+            name: "Kartofler",
+            quantity: "3 fed",
+            searchTerms: ["kartofler"],
+            category: "produce",
+          },
+        ],
+      }),
+    ];
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hvidløg", [makeOffer({ id: "garlic", heading: "Hvidløg", price: 39.91 })]],
+        ["mælk", [makeOffer({ id: "milk", heading: "Øko mælk eller fløde", price: 54.835 })]],
+        ["kartofler", [makeOffer({ id: "potatoes", heading: "Kartofler", price: 63.36 })]],
+      ]),
+    );
+
+    const result = await buildShoppingListResult(recipes, 2);
+    const { priceSummary } = result;
+
+    expect(priceSummary).toEqual({
+      confirmedPurchaseSubtotal: 103.27,
+      uncertainPurchaseSubtotal: 54.84,
+      matchedPurchaseSubtotal: 158.11,
+      currency: "DKK",
+    });
+    expect(
+      toMinorUnits(priceSummary.confirmedPurchaseSubtotal) +
+        toMinorUnits(priceSummary.uncertainPurchaseSubtotal),
+    ).toBe(toMinorUnits(priceSummary.matchedPurchaseSubtotal));
+    expect(toMinorUnits(priceSummary.matchedPurchaseSubtotal)).toBe(
+      toMinorUnits(result.grandTotal),
+    );
   });
 
   it("falls back to the sticker price when the quantity cannot be parsed", async () => {

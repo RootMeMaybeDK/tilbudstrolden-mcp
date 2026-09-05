@@ -86,6 +86,10 @@ const beefOffer = makeOffer({
   pricePerUnit: "90.00 kr/kg",
 });
 
+function toMinorUnits(amount: number): number {
+  return Math.round(amount * 100);
+}
+
 let stub: ServerStub;
 
 beforeEach(() => {
@@ -206,6 +210,20 @@ describe("scoreAllRecipes", () => {
     expect(scored[0].estimatedCost).toBe(0);
     expect(scored[0].ingredients[0].bestDeal).toBeNull();
     expect(scored[0].ingredients[0].confidence).toBe("none");
+    expect(scored[0].matchSummary).toEqual({
+      eligibleItemCount: 1,
+      confirmedMatchCount: 0,
+      lowConfidenceMatchCount: 0,
+      unmatchedItemCount: 1,
+      confirmedCoveragePercent: 0,
+      candidateCoveragePercent: 0,
+    });
+    expect(scored[0].priceSummary).toEqual({
+      confirmedDealEstimate: 0,
+      uncertainDealEstimate: 0,
+      matchedDealEstimate: 0,
+      currency: "DKK",
+    });
   });
 
   it("treats an all-pantry recipe as fully covered rather than dividing by zero", async () => {
@@ -224,6 +242,167 @@ describe("scoreAllRecipes", () => {
     const { scored } = await scoreAllRecipes(new Set(), new Set(["salt"]), 2, getLocale("DK"));
     expect(scored[0].dealCoverage).toBe(100);
     expect(scored[0].ingredients).toEqual([]);
+    expect(scored[0].matchSummary).toMatchObject({
+      eligibleItemCount: 0,
+      confirmedCoveragePercent: 100,
+      candidateCoveragePercent: 100,
+    });
+  });
+
+  it("splits high, low, and unmatched recipe values without changing legacy fields", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Hakket oksekød",
+            quantity: "500g",
+            searchTerms: ["hakket oksekød"],
+            category: "meat",
+          },
+          {
+            name: "Mælk",
+            quantity: "5 dl",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+          {
+            name: "Enhjørning",
+            quantity: "1 stk",
+            searchTerms: ["enhjørning"],
+            category: "other",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hakket oksekød", [beefOffer]],
+        ["mælk", [makeOffer({ id: "milk", heading: "Øko mælk eller fløde", price: 12 })]],
+      ]),
+    );
+
+    const { scored } = await scoreAllRecipes(new Set(), new Set(), 2, getLocale("DK"));
+    const recipe = scored[0];
+
+    expect(recipe.matchSummary).toEqual({
+      eligibleItemCount: 3,
+      confirmedMatchCount: 1,
+      lowConfidenceMatchCount: 1,
+      unmatchedItemCount: 1,
+      confirmedCoveragePercent: 33,
+      candidateCoveragePercent: 67,
+    });
+    expect(recipe.priceSummary).toEqual({
+      confirmedDealEstimate: 22.5,
+      uncertainDealEstimate: 3,
+      matchedDealEstimate: 25.5,
+      currency: "DKK",
+    });
+    expect(recipe.estimatedCost).toBe(25.5);
+    expect(recipe.dealCoverage).toBe(67);
+  });
+
+  it("keeps a repeating-decimal sticker fallback aligned with legacy estimatedCost", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        servings: 3,
+        ingredients: [
+          {
+            name: "Hakket oksekød",
+            quantity: "3 fed",
+            searchTerms: ["hakket oksekød"],
+            category: "meat",
+          },
+          {
+            name: "Mælk",
+            quantity: "3 fed",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hakket oksekød", [{ ...beefOffer, price: 10 }]],
+        ["mælk", [makeOffer({ id: "milk", heading: "Øko mælk eller fløde", price: 10 })]],
+      ]),
+    );
+
+    const { scored } = await scoreAllRecipes(new Set(), new Set(), 1, getLocale("DK"));
+    const recipe = scored[0];
+    const summary = recipe.priceSummary;
+    if (!summary) throw new Error("Expected recipe price summary");
+
+    for (const ingredient of recipe.ingredients) {
+      expect(ingredient.estimatedCost).toBeCloseTo(10 / 3, 12);
+    }
+    expect(summary).toEqual({
+      confirmedDealEstimate: 3.33,
+      uncertainDealEstimate: 3.34,
+      matchedDealEstimate: 6.67,
+      currency: "DKK",
+    });
+    expect(recipe.estimatedCost).toBe(6.67);
+    expect(toMinorUnits(summary.matchedDealEstimate)).toBe(toMinorUnits(recipe.estimatedCost));
+    expect(
+      toMinorUnits(summary.confirmedDealEstimate) + toMinorUnits(summary.uncertainDealEstimate),
+    ).toBe(toMinorUnits(summary.matchedDealEstimate));
+  });
+
+  it("preserves ingredient order when sticker fallbacks land on a half-cent boundary", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        servings: 2,
+        ingredients: [
+          {
+            name: "Hvidløg",
+            quantity: "3 fed",
+            searchTerms: ["hvidløg"],
+            category: "produce",
+          },
+          {
+            name: "Mælk",
+            quantity: "3 fed",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+          {
+            name: "Kartofler",
+            quantity: "3 fed",
+            searchTerms: ["kartofler"],
+            category: "produce",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hvidløg", [makeOffer({ id: "garlic", heading: "Hvidløg", price: 79.82 })]],
+        ["mælk", [makeOffer({ id: "milk", heading: "Øko mælk eller fløde", price: 109.67 })]],
+        ["kartofler", [makeOffer({ id: "potatoes", heading: "Kartofler", price: 126.72 })]],
+      ]),
+    );
+
+    const { scored } = await scoreAllRecipes(new Set(), new Set(), 1, getLocale("DK"));
+    const recipe = scored[0];
+    const summary = recipe.priceSummary;
+    if (!summary) throw new Error("Expected recipe price summary");
+
+    expect(recipe.ingredients.map((ingredient) => ingredient.estimatedCost)).toEqual([
+      39.91, 54.835, 63.36,
+    ]);
+    expect(recipe.estimatedCost).toBe(158.11);
+    expect(summary).toEqual({
+      confirmedDealEstimate: 103.27,
+      uncertainDealEstimate: 54.84,
+      matchedDealEstimate: 158.11,
+      currency: "DKK",
+    });
+    expect(toMinorUnits(summary.matchedDealEstimate)).toBe(toMinorUnits(recipe.estimatedCost));
+    expect(
+      toMinorUnits(summary.confirmedDealEstimate) + toMinorUnits(summary.uncertainDealEstimate),
+    ).toBe(toMinorUnits(summary.matchedDealEstimate));
   });
 
   it("attaches alternative candidates only for low-confidence matches", async () => {

@@ -17,6 +17,9 @@ import {
   SCORE,
   type ScoredRecipe,
   scoreDealMatchCtx,
+  summarizeDealMatches,
+  summarizeRecipePrices,
+  summarizeShoppingPrices,
 } from "./scoring.js";
 import type { Ingredient } from "./store.js";
 
@@ -65,6 +68,170 @@ function makeRecipe(overrides: Partial<ScoredRecipe> = {}): ScoredRecipe {
     ...overrides,
   };
 }
+
+function toMinorUnits(amount: number): number {
+  return Math.round(amount * 100);
+}
+
+// --- Confidence-aware summaries ---
+
+describe("confidence-aware summaries", () => {
+  it.each([
+    {
+      name: "only high confidence",
+      items: [{ confidence: "high" as const, amount: 12 }],
+      match: {
+        eligibleItemCount: 1,
+        confirmedMatchCount: 1,
+        lowConfidenceMatchCount: 0,
+        unmatchedItemCount: 0,
+        confirmedCoveragePercent: 100,
+        candidateCoveragePercent: 100,
+      },
+      recipePrices: [12, 0, 12],
+    },
+    {
+      name: "high and low confidence",
+      items: [
+        { confidence: "high" as const, amount: 12 },
+        { confidence: "low" as const, amount: 8 },
+      ],
+      match: {
+        eligibleItemCount: 2,
+        confirmedMatchCount: 1,
+        lowConfidenceMatchCount: 1,
+        unmatchedItemCount: 0,
+        confirmedCoveragePercent: 50,
+        candidateCoveragePercent: 100,
+      },
+      recipePrices: [12, 8, 20],
+    },
+    {
+      name: "only low confidence",
+      items: [{ confidence: "low" as const, amount: 8 }],
+      match: {
+        eligibleItemCount: 1,
+        confirmedMatchCount: 0,
+        lowConfidenceMatchCount: 1,
+        unmatchedItemCount: 0,
+        confirmedCoveragePercent: 0,
+        candidateCoveragePercent: 100,
+      },
+      recipePrices: [0, 8, 8],
+    },
+    {
+      name: "only unmatched",
+      items: [{ confidence: "none" as const, amount: 0 }],
+      match: {
+        eligibleItemCount: 1,
+        confirmedMatchCount: 0,
+        lowConfidenceMatchCount: 0,
+        unmatchedItemCount: 1,
+        confirmedCoveragePercent: 0,
+        candidateCoveragePercent: 0,
+      },
+      recipePrices: [0, 0, 0],
+    },
+    {
+      name: "high, low, and unmatched",
+      items: [
+        { confidence: "high" as const, amount: 12.25 },
+        { confidence: "low" as const, amount: 8.5 },
+        { confidence: "none" as const, amount: 0 },
+      ],
+      match: {
+        eligibleItemCount: 3,
+        confirmedMatchCount: 1,
+        lowConfidenceMatchCount: 1,
+        unmatchedItemCount: 1,
+        confirmedCoveragePercent: 33,
+        candidateCoveragePercent: 67,
+      },
+      recipePrices: [12.25, 8.5, 20.75],
+    },
+  ])("summarizes $name", ({ items, match, recipePrices }) => {
+    expect(summarizeDealMatches(items)).toEqual(match);
+    expect(summarizeRecipePrices(items, "DKK")).toEqual({
+      confirmedDealEstimate: recipePrices[0],
+      uncertainDealEstimate: recipePrices[1],
+      matchedDealEstimate: recipePrices[2],
+      currency: "DKK",
+    });
+  });
+
+  it("preserves 100 percent coverage when there are no eligible items", () => {
+    expect(summarizeDealMatches([])).toEqual({
+      eligibleItemCount: 0,
+      confirmedMatchCount: 0,
+      lowConfidenceMatchCount: 0,
+      unmatchedItemCount: 0,
+      confirmedCoveragePercent: 100,
+      candidateCoveragePercent: 100,
+    });
+  });
+
+  it("keeps recipe estimates and shopping purchase subtotals as distinct types", () => {
+    const items = [
+      { confidence: "high" as const, amount: 45 },
+      { confidence: "low" as const, amount: 12 },
+      { confidence: "none" as const, amount: 0 },
+    ];
+
+    expect(summarizeShoppingPrices(items, "DKK")).toEqual({
+      confirmedPurchaseSubtotal: 45,
+      uncertainPurchaseSubtotal: 12,
+      matchedPurchaseSubtotal: 57,
+      currency: "DKK",
+    });
+    expect(summarizeRecipePrices(items, "DKK")).toEqual({
+      confirmedDealEstimate: 45,
+      uncertainDealEstimate: 12,
+      matchedDealEstimate: 57,
+      currency: "DKK",
+    });
+  });
+
+  it("assigns a repeating-decimal rounding residual without changing the matched total", () => {
+    const result = summarizeRecipePrices(
+      [
+        { confidence: "high", amount: 10 / 3 },
+        { confidence: "low", amount: 10 / 3 },
+      ],
+      "DKK",
+    );
+
+    expect(result).toEqual({
+      confirmedDealEstimate: 3.33,
+      uncertainDealEstimate: 3.34,
+      matchedDealEstimate: 6.67,
+      currency: "DKK",
+    });
+    expect(
+      toMinorUnits(result.confirmedDealEstimate) + toMinorUnits(result.uncertainDealEstimate),
+    ).toBe(toMinorUnits(result.matchedDealEstimate));
+  });
+
+  it("preserves original item addition order for the authoritative matched total", () => {
+    const result = summarizeRecipePrices(
+      [
+        { confidence: "high", amount: 39.91 },
+        { confidence: "low", amount: 54.835 },
+        { confidence: "high", amount: 63.36 },
+      ],
+      "DKK",
+    );
+
+    expect(result).toEqual({
+      confirmedDealEstimate: 103.27,
+      uncertainDealEstimate: 54.84,
+      matchedDealEstimate: 158.11,
+      currency: "DKK",
+    });
+    expect(
+      toMinorUnits(result.confirmedDealEstimate) + toMinorUnits(result.uncertainDealEstimate),
+    ).toBe(15_811);
+  });
+});
 
 // --- parseQuantity ---
 

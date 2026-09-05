@@ -14,6 +14,8 @@ import {
   preferredDealerIds,
   type ScoredIngredient,
   type ScoredRecipe,
+  summarizeDealMatches,
+  summarizeRecipePrices,
 } from "../scoring.js";
 import * as store from "../store.js";
 import { errorResult } from "./shared.js";
@@ -75,13 +77,22 @@ function scoreOneRecipe(recipe: store.Recipe, ctx: ScoringContext): ScoredRecipe
     if (ctx.pantrySet.has(ing.name.toLowerCase())) continue;
     nonPantryCount++;
 
-    const scoredIng = scoreOneIngredient(ing, recipe.servings, ctx);
-    ingredients.push(scoredIng);
-    if (scoredIng.bestDeal) {
-      totalCost += scoredIng.estimatedCost;
+    const scoredIngredient = scoreOneIngredient(ing, recipe.servings, ctx);
+    ingredients.push(scoredIngredient);
+    if (scoredIngredient.bestDeal) {
+      totalCost += scoredIngredient.estimatedCost;
       withDeals++;
     }
   }
+
+  const summaryItems = ingredients.map((ingredient) => ({
+    confidence: ingredient.confidence,
+    amount: ingredient.estimatedCost,
+  }));
+  const matchSummary = summarizeDealMatches(summaryItems);
+  const priceSummary = summarizeRecipePrices(summaryItems, ctx.locale?.currency ?? "DKK");
+  const estimatedCost = Math.round(totalCost * 100) / 100;
+  const dealCoverage = nonPantryCount > 0 ? Math.round((withDeals / nonPantryCount) * 100) : 100;
 
   return {
     name: recipe.name,
@@ -89,9 +100,12 @@ function scoreOneRecipe(recipe: store.Recipe, ctx: ScoringContext): ScoredRecipe
     complexity: recipe.complexity,
     proteinType: recipe.proteinType,
     cuisineType: recipe.cuisineType,
-    estimatedCost: Math.round(totalCost * 100) / 100,
-    dealCoverage: nonPantryCount > 0 ? Math.round((withDeals / nonPantryCount) * 100) : 100,
+    // Legacy fields intentionally retain their existing numerical semantics.
+    estimatedCost,
+    dealCoverage,
     ingredients,
+    matchSummary,
+    priceSummary,
   };
 }
 

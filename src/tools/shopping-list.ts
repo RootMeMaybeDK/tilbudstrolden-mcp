@@ -5,12 +5,18 @@ import {
   aggregateQuantities,
   computeShoppingCost,
   computeShoppingCostFromTotal,
+  type DealMatchConfidence,
+  type DealMatchSummary,
+  type DealSummaryItem,
   expandSearchTerms,
   findBestDeal,
   formatQuantity,
   type PreferredStores,
   parseQuantity,
   preferredDealerIds,
+  type ShoppingPriceSummary,
+  summarizeDealMatches,
+  summarizeShoppingPrices,
 } from "../scoring.js";
 import * as store from "../store.js";
 import { daysUntilExpiry, expiryTag } from "./shared.js";
@@ -186,6 +192,7 @@ interface IngredientShoppingResult {
   uncertain?: string;
   expiring?: string;
   cost: number;
+  confidence: DealMatchConfidence;
 }
 
 function uncertainAlternativesLine(
@@ -220,6 +227,7 @@ function processIngredientForList(
     return {
       regular: `${ing.name} (${displayQty}) [${ing.fromRecipes.join(", ")}]`,
       cost: 0,
+      confidence: "none",
     };
   }
 
@@ -238,6 +246,7 @@ function processIngredientForList(
     storeName: best.store,
     storeLine: line,
     cost,
+    confidence: result.confidence,
   };
 
   if (daysUntilExpiry(best.validUntil) <= 2) {
@@ -253,12 +262,20 @@ function processIngredientForList(
 }
 
 /** Build the shopping list output shared by generate_shopping_list and plan_and_shop */
-export async function buildShoppingList(
+export interface ShoppingListResult {
+  text: string;
+  matchSummary: DealMatchSummary;
+  priceSummary: ShoppingPriceSummary;
+  /** Legacy matched-deal purchase subtotal retained for existing callers. */
+  grandTotal: number;
+}
+
+export async function buildShoppingListResult(
   selectedRecipes: store.Recipe[],
   householdSize: number,
   existingDealMap?: Map<string, Offer[]>,
   excludePantry = true,
-): Promise<string> {
+): Promise<ShoppingListResult> {
   const pantry = excludePantry ? await store.getPantry() : [];
   const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
   const household = await store.getHousehold();
@@ -267,7 +284,13 @@ export async function buildShoppingList(
 
   const allIngredients = collectIngredients(selectedRecipes, pantrySet);
   if (allIngredients.size === 0) {
-    return "All ingredients are in your pantry. Nothing to buy!";
+    const summaryItems: DealSummaryItem[] = [];
+    return {
+      text: "All ingredients are in your pantry. Nothing to buy!",
+      matchSummary: summarizeDealMatches(summaryItems),
+      priceSummary: summarizeShoppingPrices(summaryItems, locale.currency),
+      grandTotal: 0,
+    };
   }
 
   const dealMap = await resolveDealMap(existingDealMap, allIngredients, locale, preferredStores);
@@ -279,13 +302,33 @@ export async function buildShoppingList(
     householdSize,
   });
 
-  return formatShoppingOutput({
+  const summaryItems = tally.results.map((result) => ({
+    confidence: result.confidence,
+    amount: result.cost,
+  }));
+  const matchSummary = summarizeDealMatches(summaryItems);
+  const priceSummary = summarizeShoppingPrices(summaryItems, locale.currency);
+  const text = formatShoppingOutput({
     ...tally,
     selectedRecipes,
     householdSize,
     pantry,
     currencySymbol: locale.currencySymbol,
   });
+
+  return { text, matchSummary, priceSummary, grandTotal: tally.grandTotal };
+}
+
+/** Preserve the existing text-only shopping-list contract for MCP callers. */
+export async function buildShoppingList(
+  selectedRecipes: store.Recipe[],
+  householdSize: number,
+  existingDealMap?: Map<string, Offer[]>,
+  excludePantry = true,
+): Promise<string> {
+  return (
+    await buildShoppingListResult(selectedRecipes, householdSize, existingDealMap, excludePantry)
+  ).text;
 }
 
 /** Running totals collected while matching each ingredient against the deal map */
@@ -295,9 +338,11 @@ interface ShoppingTally {
   uncertainItems: string[];
   expiringWarnings: string[];
   grandTotal: number;
+  results: IngredientShoppingResult[];
 }
 
 function addToTally(tally: ShoppingTally, r: IngredientShoppingResult): void {
+  tally.results.push(r);
   tally.grandTotal += r.cost;
   if (r.expiring) tally.expiringWarnings.push(r.expiring);
   if (r.uncertain) tally.uncertainItems.push(r.uncertain);
@@ -319,6 +364,7 @@ function tallyIngredients(
     uncertainItems: [],
     expiringWarnings: [],
     grandTotal: 0,
+    results: [],
   };
   for (const [, ing] of allIngredients) {
     addToTally(tally, processIngredientForList(ing, ctx));

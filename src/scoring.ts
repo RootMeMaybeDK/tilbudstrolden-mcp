@@ -262,6 +262,131 @@ export interface ScoredIngredient {
   candidates?: DealCandidate[];
 }
 
+export type DealMatchConfidence = ScoredIngredient["confidence"];
+
+/** Confidence counts and coverage for a set of eligible ingredient/shopping items. */
+export interface DealMatchSummary {
+  eligibleItemCount: number;
+  confirmedMatchCount: number;
+  lowConfidenceMatchCount: number;
+  unmatchedItemCount: number;
+  /** Percentage of eligible items with a high-confidence match. */
+  confirmedCoveragePercent: number;
+  /** Percentage of eligible items with either a high- or low-confidence match. */
+  candidateCoveragePercent: number;
+}
+
+/** Proportional deal-price estimate for recipe requirements, not a checkout total. */
+export interface RecipePriceSummary {
+  confirmedDealEstimate: number;
+  uncertainDealEstimate: number;
+  matchedDealEstimate: number;
+  currency: string;
+}
+
+/** Pack-aware purchase subtotal for matched shopping items, not a full basket total. */
+export interface ShoppingPriceSummary {
+  confirmedPurchaseSubtotal: number;
+  uncertainPurchaseSubtotal: number;
+  matchedPurchaseSubtotal: number;
+  currency: string;
+}
+
+export interface DealSummaryItem {
+  confidence: DealMatchConfidence;
+  amount: number;
+}
+
+function coveragePercent(matches: number, eligible: number): number {
+  // Preserve the legacy all-pantry/no-eligible-items coverage semantics.
+  return eligible === 0 ? 100 : Math.round((matches / eligible) * 100);
+}
+
+/** Summarize accepted matches directly from confidence, independently of display output. */
+export function summarizeDealMatches(items: readonly DealSummaryItem[]): DealMatchSummary {
+  let confirmedMatchCount = 0;
+  let lowConfidenceMatchCount = 0;
+  let unmatchedItemCount = 0;
+
+  for (const item of items) {
+    if (item.confidence === "high") confirmedMatchCount++;
+    else if (item.confidence === "low") lowConfidenceMatchCount++;
+    else unmatchedItemCount++;
+  }
+
+  const eligibleItemCount = items.length;
+  return {
+    eligibleItemCount,
+    confirmedMatchCount,
+    lowConfidenceMatchCount,
+    unmatchedItemCount,
+    confirmedCoveragePercent: coveragePercent(confirmedMatchCount, eligibleItemCount),
+    candidateCoveragePercent: coveragePercent(
+      confirmedMatchCount + lowConfidenceMatchCount,
+      eligibleItemCount,
+    ),
+  };
+}
+
+function summarizeAmounts(items: readonly DealSummaryItem[]): {
+  confirmed: number;
+  uncertain: number;
+  matched: number;
+} {
+  let rawMatched = 0;
+  let rawConfirmed = 0;
+  let rawUncertain = 0;
+  for (const item of items) {
+    if (item.confidence === "high") {
+      rawMatched += item.amount;
+      rawConfirmed += item.amount;
+    } else if (item.confidence === "low") {
+      rawMatched += item.amount;
+      rawUncertain += item.amount;
+    }
+  }
+
+  const matchedMinor = Math.round(rawMatched * 100);
+  const confirmedMinor = Math.round(rawConfirmed * 100);
+  const roundedUncertainMinor = Math.round(rawUncertain * 100);
+  const roundingResidualMinor = matchedMinor - confirmedMinor - roundedUncertainMinor;
+  // Assign any minor-unit rounding residual deterministically to uncertain.
+  const uncertainMinor = roundedUncertainMinor + roundingResidualMinor;
+  return {
+    confirmed: confirmedMinor / 100,
+    uncertain: uncertainMinor / 100,
+    matched: matchedMinor / 100,
+  };
+}
+
+/** Split proportional recipe deal estimates into confirmed and uncertain buckets. */
+export function summarizeRecipePrices(
+  items: readonly DealSummaryItem[],
+  currency: string,
+): RecipePriceSummary {
+  const amounts = summarizeAmounts(items);
+  return {
+    confirmedDealEstimate: amounts.confirmed,
+    uncertainDealEstimate: amounts.uncertain,
+    matchedDealEstimate: amounts.matched,
+    currency,
+  };
+}
+
+/** Split pack-aware shopping costs into confirmed and uncertain purchase buckets. */
+export function summarizeShoppingPrices(
+  items: readonly DealSummaryItem[],
+  currency: string,
+): ShoppingPriceSummary {
+  const amounts = summarizeAmounts(items);
+  return {
+    confirmedPurchaseSubtotal: amounts.confirmed,
+    uncertainPurchaseSubtotal: amounts.uncertain,
+    matchedPurchaseSubtotal: amounts.matched,
+    currency,
+  };
+}
+
 export interface ScoredRecipe {
   name: string;
   servings: number;
@@ -271,6 +396,10 @@ export interface ScoredRecipe {
   estimatedCost: number;
   dealCoverage: number;
   ingredients: ScoredIngredient[];
+  /** Additive confidence summary; populated by scoreAllRecipes(). */
+  matchSummary?: DealMatchSummary;
+  /** Additive price summary; populated by scoreAllRecipes(). */
+  priceSummary?: RecipePriceSummary;
 }
 
 // --- Product form indicators ---
