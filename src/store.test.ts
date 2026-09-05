@@ -92,8 +92,9 @@ describe("datastore persistence", () => {
     await expect(store.load()).resolves.toEqual(expected);
     if (process.platform !== "win32") {
       expect((await fs.stat(dataPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(`${dataPath}.lock`)).mode & 0o777).toBe(0o600);
     }
-    expect(await fs.readdir(tempDirectory)).toEqual(["data.json"]);
+    expect((await fs.readdir(tempDirectory)).sort()).toEqual(["data.json", "data.json.lock"]);
   });
 
   it("creates a missing parent directory before an atomic save", async () => {
@@ -116,7 +117,7 @@ describe("datastore persistence", () => {
     await expect(store.save(replacement)).rejects.toThrow("injected rename failure");
 
     await expect(fs.readFile(dataPath, "utf-8")).resolves.toBe(originalContent);
-    expect(await fs.readdir(tempDirectory)).toEqual(["data.json"]);
+    expect((await fs.readdir(tempDirectory)).sort()).toEqual(["data.json", "data.json.lock"]);
   });
 
   it("keeps a committed save successful when the directory sync fails", async () => {
@@ -141,7 +142,7 @@ describe("datastore persistence", () => {
     expect(directorySyncAttempted).toBe(process.platform === "linux");
     await expect(store.load()).resolves.toEqual(replacement);
     expect(JSON.parse(await fs.readFile(dataPath, "utf-8"))).toEqual(replacement);
-    expect(await fs.readdir(tempDirectory)).toEqual(["data.json"]);
+    expect((await fs.readdir(tempDirectory)).sort()).toEqual(["data.json", "data.json.lock"]);
   });
 
   it("does not seed recipes over an invalid existing datastore", async () => {

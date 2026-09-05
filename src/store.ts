@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import fsExt from "fs-ext";
 import { z } from "zod";
 import { defaultRecipes } from "./default-recipes.js";
 
@@ -154,13 +156,25 @@ function emptyStore(): DataStore {
 
 // --- File I/O with mutex ---
 
+const LOCK_RETRY_INTERVAL_MS = 50;
+const LOCK_WAIT_TIMEOUT_MS = 3000;
+
+export class DatastoreBusyError extends Error {
+  readonly code = "DATASTORE_BUSY";
+
+  constructor() {
+    super("Datastore is busy; try again shortly.");
+    this.name = "DatastoreBusyError";
+  }
+}
+
 function getStorePath(): string {
   const custom = process.env.TILBUDSTROLDEN_DATA;
   if (custom) return custom;
   return path.join(os.homedir(), ".tilbudstrolden.json");
 }
 
-// Simple async mutex to prevent concurrent read-modify-write corruption
+// Process-local serialization is always acquired before the cross-process lock.
 let lockPromise: Promise<void> = Promise.resolve();
 
 function withLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -170,6 +184,72 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
     resolve = r;
   });
   return prev.then(fn).finally(() => resolve?.());
+}
+
+function flock(fd: number, operation: "exnb" | "un"): Promise<void> {
+  return new Promise((resolve, reject) => {
+    fsExt.flock(fd, operation, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function acquireDatastoreLock(handle: Awaited<ReturnType<typeof fs.open>>): Promise<void> {
+  const deadline = performance.now() + LOCK_WAIT_TIMEOUT_MS;
+  while (true) {
+    try {
+      await flock(handle.fd, "exnb");
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EAGAIN") throw error;
+
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new DatastoreBusyError();
+      await wait(Math.min(LOCK_RETRY_INTERVAL_MS, remaining));
+    }
+  }
+}
+
+async function closeUnacquiredLockHandle(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+): Promise<void> {
+  await handle.close().catch(() => undefined);
+}
+
+async function releaseDatastoreLock(handle: Awaited<ReturnType<typeof fs.open>>): Promise<void> {
+  await flock(handle.fd, "un").catch((error: unknown) => {
+    console.error("Failed to unlock datastore sidecar; operation result is unchanged:", error);
+  });
+  await handle.close().catch((error: unknown) => {
+    console.error("Failed to close datastore lock handle; operation result is unchanged:", error);
+  });
+}
+
+async function withDatastoreWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  return withLock(async () => {
+    const filePath = getStorePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+
+    const handle = await fs.open(`${filePath}.lock`, "a", 0o600);
+    try {
+      await handle.chmod(0o600);
+      await acquireDatastoreLock(handle);
+    } catch (error) {
+      await closeUnacquiredLockHandle(handle);
+      throw error;
+    }
+
+    try {
+      return await fn();
+    } finally {
+      await releaseDatastoreLock(handle);
+    }
+  });
 }
 
 async function loadRaw(): Promise<DataStore> {
@@ -235,14 +315,16 @@ export async function load(): Promise<DataStore> {
 }
 
 export async function save(data: DataStore): Promise<void> {
-  return withLock(() => saveRaw(data));
+  // Full replacement only: callers with a read-modify-write flow must use modify()
+  // so that loading the latest state happens inside the cross-process transaction.
+  return withDatastoreWriteLock(() => saveRaw(data));
 }
 
 // Run a read-modify-write operation atomically
 export async function modify(
   fn: (data: DataStore) => DataStore | Promise<DataStore>,
 ): Promise<DataStore> {
-  return withLock(async () => {
+  return withDatastoreWriteLock(async () => {
     const data = await loadRaw();
     const updated = await fn(data);
     await saveRaw(updated);
