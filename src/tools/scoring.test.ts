@@ -12,9 +12,10 @@ import type { Offer } from "../api.js";
 import { getLocale } from "../locales.js";
 import type { Household, Recipe } from "../store.js";
 
-vi.mock("../api.js", () => ({
-  searchDealsBatch: vi.fn(),
-}));
+vi.mock("../api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api.js")>();
+  return { ...actual, searchDealsBatch: vi.fn() };
+});
 
 vi.mock("../store.js", () => ({
   getRecipes: vi.fn(),
@@ -134,6 +135,20 @@ describe("scoreAllRecipes", () => {
     expect(new Set(terms).size).toBe(terms.length);
     expect(limit).toBe(8);
     expect(country).toBe("DK");
+  });
+
+  it("caps the internal candidate budget at the upstream limit", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
+    const preferredStores = Array.from({ length: 20 }, (_, index) => ({
+      name: `Store ${index}`,
+      dealerId: `dealer-${index}`,
+    }));
+
+    await scoreAllRecipes(preferredStores, new Set(), 2, getLocale("DK"));
+    const [, limit, , options] = vi.mocked(api.searchDealsBatch).mock.calls[0];
+
+    expect(limit).toBe(100);
+    expect(options?.dealerIds?.size).toBe(20);
   });
 
   it("excludes pantry ingredients from both the search and the coverage denominator", async () => {
@@ -317,6 +332,45 @@ describe("score_recipes tool", () => {
     expect(text).toContain("medium | italian | beef | 4 servings");
     expect(text).toContain("Deals:");
     expect(text).toContain("Hakket oksekød (500g): Hakket oksekød 8-12% — 23 DKK @ Netto");
+  });
+
+  it("passes household dealer IDs to retrieval and accepts foetex/Føtex by stable ID", async () => {
+    vi.mocked(store.getHousehold).mockResolvedValue(
+      makeHousehold({
+        stores: [{ name: "foetex", dealerId: "bdf5A", priority: 1 }],
+      }),
+    );
+    vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hakket oksekød", [beefOffer, { ...beefOffer, store: "Føtex", storeId: "bdf5A" }]],
+      ]),
+    );
+
+    const text = textOf(await callTool(stub, "score_recipes", {}));
+    const [, limit, , options] = vi.mocked(api.searchDealsBatch).mock.calls[0];
+
+    expect(limit).toBe(8);
+    expect(options?.dealerIds).toEqual(new Set(["bdf5A"]));
+    expect(text).toContain("deals on 100% of ingredients");
+    expect(text).toContain("@ Føtex");
+  });
+
+  it("rejects the same display name when the offer dealer ID is wrong", async () => {
+    vi.mocked(store.getHousehold).mockResolvedValue(
+      makeHousehold({
+        stores: [{ name: "Føtex", dealerId: "bdf5A", priority: 1 }],
+      }),
+    );
+    vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([["hakket oksekød", [{ ...beefOffer, store: "Føtex", storeId: "wrong-id" }]]]),
+    );
+
+    const text = textOf(await callTool(stub, "score_recipes", {}));
+
+    expect(text).toContain("deals on 0% of ingredients");
+    expect(text).toContain("No deals: Hakket oksekød");
   });
 
   it("uses the household country's currency", async () => {

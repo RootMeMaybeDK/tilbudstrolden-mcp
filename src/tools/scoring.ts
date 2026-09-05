@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Offer } from "../api.js";
-import { searchDealsBatch } from "../api.js";
+import { internalDealCandidateLimit, searchDealsBatch } from "../api.js";
 import { getLocale, type Locale } from "../locales.js";
 import {
   calculateBasketCost,
@@ -10,6 +10,8 @@ import {
   expandSearchTerms,
   findBestDeal,
   findOptimalWeek,
+  type PreferredStores,
+  preferredDealerIds,
   type ScoredIngredient,
   type ScoredRecipe,
 } from "../scoring.js";
@@ -19,7 +21,7 @@ import { errorResult } from "./shared.js";
 /** Everything a recipe needs to be scored against the current deal map */
 interface ScoringContext {
   dealMap: Map<string, Offer[]>;
-  preferredStoreNames: Set<string>;
+  preferredStores: PreferredStores;
   pantrySet: Set<string>;
   householdSize: number;
   locale?: Locale;
@@ -41,7 +43,7 @@ function scoreOneIngredient(
   servings: number,
   ctx: ScoringContext,
 ): ScoredIngredient {
-  const result = findBestDeal(ing, ctx.dealMap, ctx.preferredStoreNames, ctx.locale);
+  const result = findBestDeal(ing, ctx.dealMap, ctx.preferredStores, ctx.locale);
   const cost = result.best
     ? computeIngredientCost(result.best, ing.quantity, servings, ctx.householdSize)
     : 0;
@@ -117,7 +119,7 @@ function collectSearchTerms(
 }
 
 export async function scoreAllRecipes(
-  preferredStoreNames: Set<string>,
+  preferredStores: PreferredStores,
   pantrySet: Set<string>,
   householdSize: number,
   locale?: Locale,
@@ -128,11 +130,19 @@ export async function scoreAllRecipes(
   // Batch fetch all deals in parallel
   const allTerms = collectSearchTerms(recipes, pantrySet, locale);
   const countryId = locale?.country ?? "DK";
-  const dealMap = await searchDealsBatch([...allTerms], 8, countryId);
+  const dealerIds = preferredDealerIds(preferredStores);
+  const dealMap = await searchDealsBatch(
+    [...allTerms],
+    internalDealCandidateLimit(dealerIds),
+    countryId,
+    {
+      dealerIds,
+    },
+  );
 
   // Score each recipe
   const scored: ScoredRecipe[] = recipes.map((recipe) =>
-    scoreOneRecipe(recipe, { dealMap, preferredStoreNames, pantrySet, householdSize, locale }),
+    scoreOneRecipe(recipe, { dealMap, preferredStores, pantrySet, householdSize, locale }),
   );
 
   scored.sort((a, b) => {
@@ -281,10 +291,8 @@ async function handleScoreRecipes(args: ScoreRecipesArgs) {
     const locale = getLocale(household.country);
     const pantry = await store.getPantry();
     const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
-    const preferredStores = new Set(household.stores.map((s) => s.name));
-
     const householdSize = household.people.length || household.defaultServings;
-    const { scored } = await scoreAllRecipes(preferredStores, pantrySet, householdSize, locale);
+    const { scored } = await scoreAllRecipes(household.stores, pantrySet, householdSize, locale);
 
     const parts = [
       `# Recipe scores (${scored.length} recipes)\n`,

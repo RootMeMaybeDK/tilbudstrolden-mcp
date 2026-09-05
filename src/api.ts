@@ -11,6 +11,8 @@ const FETCH_TIMEOUT_MS = 8000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
 const MAX_CONCURRENT = 4;
+const BASE_INTERNAL_CANDIDATE_LIMIT = 8;
+const MAX_UPSTREAM_SEARCH_LIMIT = 100;
 
 export interface Offer {
   id: string;
@@ -35,6 +37,17 @@ export interface Dealer {
   website: string | null;
   logoUrl: string | null;
   country: string;
+}
+
+export interface DealSearchOptions {
+  /** Restrict results to these stable dealer IDs before applying the result limit. */
+  dealerIds?: ReadonlySet<string>;
+}
+
+/** Bounded candidate pool used by internal scoring and shopping searches. */
+export function internalDealCandidateLimit(dealerIds: ReadonlySet<string>): number {
+  const dealerCount = Math.max(dealerIds.size, 1);
+  return Math.min(BASE_INTERNAL_CANDIDATE_LIMIT * dealerCount, MAX_UPSTREAM_SEARCH_LIMIT);
 }
 
 interface RawOffer {
@@ -258,33 +271,52 @@ export function clearDealerCache(): void {
   dealerCacheByCountry.clear();
 }
 
-export async function searchDeals(query: string, limit = 20, countryId = "DK"): Promise<Offer[]> {
-  // Request extra to compensate for filtering non-matching results
+export async function searchDeals(
+  query: string,
+  limit = 20,
+  countryId = "DK",
+  options: DealSearchOptions = {},
+): Promise<Offer[]> {
+  const requestedDealerIds = options.dealerIds;
+  const hasDealerFilter = Boolean(requestedDealerIds && requestedDealerIds.size > 0);
+
+  // Preserve the existing global over-fetch, but let upstream rank within
+  // preferred dealers when stable IDs are available.
   const params = new URLSearchParams({
     query,
-    limit: String(limit * 3),
+    limit: String(hasDealerFilter ? limit : limit * 3),
     country_id: countryId,
   });
+  if (requestedDealerIds && requestedDealerIds.size > 0) {
+    // Set iteration preserves the household store-priority insertion order.
+    params.set("dealer_ids", [...requestedDealerIds].join(","));
+  }
   const raw = await fetchJson<RawOffer[]>(`${BASE_URL}/offers/search?${params}`);
 
+  let offers: Offer[];
   if (countryId === "DK") {
     // DK: /dealers endpoint works, use allow-list for best accuracy
-    const dealerIds = await getDealerIds("DK");
-    return raw
-      .map(parseOffer)
-      .filter((o) => dealerIds.has(o.storeId))
-      .slice(0, limit);
+    const countryDealerIds = await getDealerIds("DK");
+    const allowedDealerIds = hasDealerFilter
+      ? new Set([...countryDealerIds, ...(requestedDealerIds ?? [])])
+      : countryDealerIds;
+    offers = raw.map(parseOffer).filter((o) => allowedDealerIds.has(o.storeId));
+  } else {
+    // NO/SE/FI: /dealers endpoint ignores country_id, so filter by dealer.country
+    // from the raw response instead
+    offers = raw
+      .filter((o) => {
+        const dc = (o as RawOfferWithCountry).dealer?.country?.id;
+        return !dc || dc === countryId;
+      })
+      .map(parseOffer);
   }
 
-  // NO/SE/FI: /dealers endpoint ignores country_id, so filter by dealer.country
-  // from the raw response instead
-  return raw
-    .filter((o) => {
-      const dc = (o as RawOfferWithCountry).dealer?.country?.id;
-      return !dc || dc === countryId;
-    })
-    .map(parseOffer)
-    .slice(0, limit);
+  if (requestedDealerIds && requestedDealerIds.size > 0) {
+    offers = offers.filter((offer) => requestedDealerIds.has(offer.storeId));
+  }
+
+  return offers.slice(0, limit);
 }
 
 export async function getStoreOffers(dealerId: string, limit = 50): Promise<Offer[]> {
@@ -304,10 +336,11 @@ export async function searchDealsBatch(
   queries: string[],
   limit = 5,
   countryId = "DK",
+  options: DealSearchOptions = {},
 ): Promise<Map<string, Offer[]>> {
   const unique = [...new Set(queries)];
   const tasks = unique.map((q) => async () => {
-    const offers = await searchDeals(q, limit, countryId);
+    const offers = await searchDeals(q, limit, countryId, options);
     return [q, offers] as const;
   });
 

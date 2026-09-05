@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { Offer } from "./api.js";
+import { getLocale } from "./locales.js";
 import {
+  aggregateQuantities,
   buildMatchContext,
   calculateBasketCost,
   computeIngredientCost,
   computeShoppingCost,
+  computeShoppingCostFromTotal,
   findBestDeal,
   findOptimalWeek,
+  formatQuantity,
   isModifierPosition,
+  normalizeQuantity,
   parseQuantity,
   SCORE,
   type ScoredRecipe,
@@ -108,6 +113,136 @@ describe("parseQuantity", () => {
 
   it("handles decimal with period", () => {
     expect(parseQuantity("1.5 kg")).toEqual({ amount: 1500, unit: "g" });
+  });
+});
+
+describe("quantity precision and aggregation", () => {
+  it("normalizes floating-point noise without integer rounding", () => {
+    expect(normalizeQuantity(0.1 + 0.2)).toBe(0.3);
+    expect(normalizeQuantity(0.37500000000000006)).toBe(0.375);
+  });
+
+  it.each([
+    ["0.5 stk", 3, 0.375],
+    ["0.5 stk", 2, 0.25],
+    ["0.5 stk", 5, 0.625],
+    ["0.5 stk", 6, 0.75],
+    ["1 stk", 3, 0.75],
+    ["1 stk", 2, 0.5],
+    ["1 stk", 5, 1.25],
+    ["1 stk", 6, 1.5],
+    ["2 stk", 3, 1.5],
+    ["2 stk", 2, 1],
+    ["2 stk", 5, 2.5],
+    ["2 stk", 6, 3],
+  ])("scales %s from four servings to %i people as %s stk", (quantity, people, expected) => {
+    expect(aggregateQuantities([{ quantity, recipeServings: 4 }], people)).toEqual({
+      totalAmount: expected,
+      unit: "stk",
+    });
+  });
+
+  it("sums fractional stk requirements before any purchase rounding", () => {
+    expect(
+      aggregateQuantities(
+        [
+          { quantity: "0.5 stk", recipeServings: 4 },
+          { quantity: "0.5 stk", recipeServings: 4 },
+        ],
+        4,
+      ),
+    ).toEqual({ totalAmount: 1, unit: "stk" });
+
+    expect(
+      aggregateQuantities(
+        [
+          { quantity: "0.5 stk", recipeServings: 4 },
+          { quantity: "0.5 stk", recipeServings: 4 },
+        ],
+        3,
+      ),
+    ).toEqual({ totalAmount: 0.75, unit: "stk" });
+  });
+
+  it("preserves a 1.2 stk aggregate for purchase calculation", () => {
+    const aggregated = aggregateQuantities(
+      [
+        { quantity: "0.6 stk", recipeServings: 4 },
+        { quantity: "0.6 stk", recipeServings: 4 },
+      ],
+      4,
+    );
+
+    expect(aggregated).toEqual({ totalAmount: 1.2, unit: "stk" });
+    expect(
+      computeShoppingCostFromTotal(
+        makeOffer({ quantity: 1, unit: "stk" }),
+        aggregated?.totalAmount ?? 0,
+        "stk",
+      )?.packsNeeded,
+    ).toBe(2);
+  });
+
+  it("does not buy an extra pack due only to floating-point noise", () => {
+    const aggregated = aggregateQuantities(
+      [
+        { quantity: "0.1 stk", recipeServings: 4 },
+        { quantity: "0.2 stk", recipeServings: 4 },
+      ],
+      4,
+    );
+
+    expect(aggregated?.totalAmount).toBe(0.3);
+    expect(
+      computeShoppingCostFromTotal(
+        makeOffer({ quantity: 0.3, unit: "stk" }),
+        aggregated?.totalAmount ?? 0,
+        "stk",
+      )?.packsNeeded,
+    ).toBe(1);
+  });
+
+  it.each([
+    ["400 g", 3, 300, "g"],
+    ["1 kg", 3, 750, "g"],
+    ["200 ml", 3, 150, "ml"],
+    ["33 cl", 4, 330, "ml"],
+    ["2 dl", 3, 150, "ml"],
+    ["1 l", 3, 750, "ml"],
+  ])("keeps metric scaling stable for %s", (quantity, people, totalAmount, unit) => {
+    expect(aggregateQuantities([{ quantity, recipeServings: 4 }], people)).toEqual({
+      totalAmount,
+      unit,
+    });
+  });
+
+  it("aggregates compatible metric units in their base units", () => {
+    expect(
+      aggregateQuantities(
+        [
+          { quantity: "500 g", recipeServings: 4 },
+          { quantity: "0.5 kg", recipeServings: 4 },
+        ],
+        4,
+      ),
+    ).toEqual({ totalAmount: 1000, unit: "g" });
+    expect(
+      aggregateQuantities(
+        [
+          { quantity: "100 ml", recipeServings: 4 },
+          { quantity: "1 dl", recipeServings: 4 },
+        ],
+        4,
+      ),
+    ).toEqual({ totalAmount: 200, unit: "ml" });
+  });
+
+  it("formats fractional requirements without noise or trailing zeroes", () => {
+    expect(formatQuantity(0.37500000000000006, "stk")).toBe("0.375 stk");
+    expect(formatQuantity(0.25, "stk")).toBe("0.25 stk");
+    expect(formatQuantity(1.5, "stk")).toBe("1.5 stk");
+    expect(formatQuantity(500, "g")).toBe("500 g");
+    expect(formatQuantity(1500, "g")).toBe("1.5 kg");
   });
 });
 
@@ -234,6 +369,25 @@ describe("computeShoppingCost", () => {
   });
 });
 
+describe("purchase quantity", () => {
+  it.each([
+    [0.375, 1, 1],
+    [1, 1, 1],
+    [1.2, 1, 2],
+    [2, 2, 1],
+  ])("keeps a %s stk requirement separate from %s-stk packs", (requirement, packSize, packsNeeded) => {
+    const result = computeShoppingCostFromTotal(
+      makeOffer({ quantity: packSize, unit: "stk" }),
+      requirement,
+      "stk",
+    );
+
+    expect(result?.quantityNeeded).toBe(requirement);
+    expect(result?.packSize).toBe(packSize);
+    expect(result?.packsNeeded).toBe(packsNeeded);
+  });
+});
+
 // --- scoreDealMatch ---
 
 describe("scoreDealMatch", () => {
@@ -268,6 +422,42 @@ describe("scoreDealMatch", () => {
     const ing = makeIngredient({ category: "dairy" });
     const preferred = new Set(["Netto"]);
     const score = scoreDealMatchCtx(offer, ing, "oksekød", buildMatchContext(preferred));
+    expect(score).toBeGreaterThan(SCORE.BASE);
+  });
+
+  it("uses matching dealer IDs as the authoritative preferred-store identity", () => {
+    const offer = makeOffer({ store: "Føtex", storeId: "bdf5A" });
+    const preferred = [{ name: "foetex", dealerId: "bdf5A" }];
+    const score = scoreDealMatchCtx(
+      offer,
+      makeIngredient({ category: "dairy" }),
+      "oksekød",
+      buildMatchContext(preferred, getLocale("DK")),
+    );
+    expect(score).toBeGreaterThan(SCORE.BASE);
+  });
+
+  it("rejects a matching display name when the stable dealer ID is wrong", () => {
+    const offer = makeOffer({ store: "Føtex", storeId: "wrong-id" });
+    const preferred = [{ name: "Føtex", dealerId: "bdf5A" }];
+    const score = scoreDealMatchCtx(
+      offer,
+      makeIngredient({ category: "dairy" }),
+      "oksekød",
+      buildMatchContext(preferred, getLocale("DK")),
+    );
+    expect(score).toBe(0);
+  });
+
+  it("uses locale store aliases only as a fallback when a stable ID is missing", () => {
+    const offer = makeOffer({ store: "Føtex", storeId: "" });
+    const preferred = [{ name: "foetex" }];
+    const score = scoreDealMatchCtx(
+      offer,
+      makeIngredient({ category: "dairy" }),
+      "oksekød",
+      buildMatchContext(preferred, getLocale("DK")),
+    );
     expect(score).toBeGreaterThan(SCORE.BASE);
   });
 
@@ -443,6 +633,29 @@ describe("findBestDeal", () => {
     } else {
       expect(result.confidence).toBe("none");
     }
+  });
+
+  it("does not promote Tuborg Squash to a high-confidence squash match", () => {
+    const offer = makeOffer({
+      heading: "Coca-Cola, Fanta eller Tuborg Squash",
+      store: "365discount",
+      storeId: "DWZE1w",
+    });
+    const ingredient = makeIngredient({
+      name: "Squash",
+      searchTerms: ["squash"],
+      category: "produce",
+    });
+    const result = findBestDeal(
+      ingredient,
+      new Map([["squash", [offer]]]),
+      [{ name: "365discount", dealerId: "DWZE1w" }],
+      getLocale("DK"),
+    );
+
+    expect(result.best).toBe(offer);
+    expect(result.confidence).toBe("low");
+    expect(result.bestScore).toBeLessThan(SCORE.CONFIDENT_THRESHOLD);
   });
 
   it("returns up to 3 candidates", () => {
