@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Offer } from "./api.js";
+import { getLocale } from "./locales.js";
 import {
   buildMatchContext,
   calculateBasketCost,
@@ -271,6 +272,42 @@ describe("scoreDealMatch", () => {
     expect(score).toBeGreaterThan(SCORE.BASE);
   });
 
+  it("uses matching dealer IDs as the authoritative preferred-store identity", () => {
+    const offer = makeOffer({ store: "Føtex", storeId: "bdf5A" });
+    const preferred = [{ name: "foetex", dealerId: "bdf5A" }];
+    const score = scoreDealMatchCtx(
+      offer,
+      makeIngredient({ category: "dairy" }),
+      "oksekød",
+      buildMatchContext(preferred, getLocale("DK")),
+    );
+    expect(score).toBeGreaterThan(SCORE.BASE);
+  });
+
+  it("rejects a matching display name when the stable dealer ID is wrong", () => {
+    const offer = makeOffer({ store: "Føtex", storeId: "wrong-id" });
+    const preferred = [{ name: "Føtex", dealerId: "bdf5A" }];
+    const score = scoreDealMatchCtx(
+      offer,
+      makeIngredient({ category: "dairy" }),
+      "oksekød",
+      buildMatchContext(preferred, getLocale("DK")),
+    );
+    expect(score).toBe(0);
+  });
+
+  it("uses locale store aliases only as a fallback when a stable ID is missing", () => {
+    const offer = makeOffer({ store: "Føtex", storeId: "" });
+    const preferred = [{ name: "foetex" }];
+    const score = scoreDealMatchCtx(
+      offer,
+      makeIngredient({ category: "dairy" }),
+      "oksekød",
+      buildMatchContext(preferred, getLocale("DK")),
+    );
+    expect(score).toBeGreaterThan(SCORE.BASE);
+  });
+
   it("penalizes non-preferred stores", () => {
     const offer = makeOffer({ store: "Bilka" });
     const ing = makeIngredient({ category: "dairy" });
@@ -443,6 +480,29 @@ describe("findBestDeal", () => {
     } else {
       expect(result.confidence).toBe("none");
     }
+  });
+
+  it("does not promote Tuborg Squash to a high-confidence squash match", () => {
+    const offer = makeOffer({
+      heading: "Coca-Cola, Fanta eller Tuborg Squash",
+      store: "365discount",
+      storeId: "DWZE1w",
+    });
+    const ingredient = makeIngredient({
+      name: "Squash",
+      searchTerms: ["squash"],
+      category: "produce",
+    });
+    const result = findBestDeal(
+      ingredient,
+      new Map([["squash", [offer]]]),
+      [{ name: "365discount", dealerId: "DWZE1w" }],
+      getLocale("DK"),
+    );
+
+    expect(result.best).toBe(offer);
+    expect(result.confidence).toBe("low");
+    expect(result.bestScore).toBeLessThan(SCORE.CONFIDENT_THRESHOLD);
   });
 
   it("returns up to 3 candidates", () => {

@@ -91,11 +91,10 @@ async function handlePlanAndShop(args: PlanArgs) {
     const locale = getLocale(household.country);
     const pantry = await store.getPantry();
     const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
-    const preferredStores = new Set(household.stores.map((s) => s.name));
     const householdSize = people ?? (household.people.length || household.defaultServings);
 
     const { scored, dealMap: cachedDeals } = await scoreAllRecipes(
-      preferredStores,
+      household.stores,
       pantrySet,
       householdSize,
       locale,

@@ -1,5 +1,5 @@
 import type { Offer } from "../api.js";
-import { searchDealsBatch } from "../api.js";
+import { internalDealCandidateLimit, searchDealsBatch } from "../api.js";
 import { getLocale } from "../locales.js";
 import {
   aggregateQuantities,
@@ -8,7 +8,9 @@ import {
   expandSearchTerms,
   findBestDeal,
   formatQuantity,
+  type PreferredStores,
   parseQuantity,
+  preferredDealerIds,
 } from "../scoring.js";
 import * as store from "../store.js";
 import { daysUntilExpiry, expiryTag } from "./shared.js";
@@ -158,6 +160,7 @@ async function resolveDealMap(
   existingDealMap: Map<string, Offer[]> | undefined,
   ingredients: ReturnType<typeof collectIngredients>,
   locale: ReturnType<typeof getLocale>,
+  preferredStores: PreferredStores,
 ): Promise<Map<string, Offer[]>> {
   if (existingDealMap) return existingDealMap;
   const allSearchTerms = new Set<string>();
@@ -165,7 +168,15 @@ async function resolveDealMap(
     for (const term of expandSearchTerms(ing.searchTerms, locale.synonymMap))
       allSearchTerms.add(term);
   }
-  return searchDealsBatch([...allSearchTerms], 8, locale.country);
+  const dealerIds = preferredDealerIds(preferredStores);
+  return searchDealsBatch(
+    [...allSearchTerms],
+    internalDealCandidateLimit(dealerIds),
+    locale.country,
+    {
+      dealerIds,
+    },
+  );
 }
 
 interface IngredientShoppingResult {
@@ -192,7 +203,7 @@ function uncertainAlternativesLine(
 /** Everything a single ingredient needs to be matched against deals and priced */
 interface ShoppingContext {
   dealMap: Map<string, Offer[]>;
-  preferredStores: Set<string>;
+  preferredStores: PreferredStores;
   locale: ReturnType<typeof getLocale>;
   householdSize: number;
 }
@@ -252,14 +263,14 @@ export async function buildShoppingList(
   const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
   const household = await store.getHousehold();
   const locale = getLocale(household.country);
-  const preferredStores = new Set(household.stores.map((s) => s.name));
+  const preferredStores = household.stores;
 
   const allIngredients = collectIngredients(selectedRecipes, pantrySet);
   if (allIngredients.size === 0) {
     return "All ingredients are in your pantry. Nothing to buy!";
   }
 
-  const dealMap = await resolveDealMap(existingDealMap, allIngredients, locale);
+  const dealMap = await resolveDealMap(existingDealMap, allIngredients, locale, preferredStores);
 
   const tally = tallyIngredients(allIngredients, {
     dealMap,

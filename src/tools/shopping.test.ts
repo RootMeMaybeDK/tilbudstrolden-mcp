@@ -11,9 +11,10 @@ import { callTool, createServerStub, type ServerStub, textOf } from "../../test/
 import type { Offer } from "../api.js";
 import type { Household, Recipe } from "../store.js";
 
-vi.mock("../api.js", () => ({
-  searchDealsBatch: vi.fn(),
-}));
+vi.mock("../api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api.js")>();
+  return { ...actual, searchDealsBatch: vi.fn() };
+});
 
 vi.mock("../store.js", () => ({
   getRecipes: vi.fn(),
@@ -150,6 +151,42 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("[500 g/pack, 90.00 kr/kg]");
     expect(text).toContain("(250 g leftover)");
     expect(text).toContain("-- Hakket oksekød 8-12% @ Netto until 2026-06-30");
+  });
+
+  it("passes dealer IDs to retrieval and groups a foetex/Føtex ID match", async () => {
+    vi.mocked(store.getHousehold).mockResolvedValue(
+      makeHousehold({
+        stores: [{ name: "foetex", dealerId: "bdf5A", priority: 1 }],
+      }),
+    );
+    vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([["hakket oksekød", [makeOffer({ store: "Føtex", storeId: "bdf5A" })]]]),
+    );
+
+    const text = textOf(await callTool(stub, "generate_shopping_list", { recipes: ["Bolognese"] }));
+    const [, limit, , options] = vi.mocked(api.searchDealsBatch).mock.calls[0];
+
+    expect(limit).toBe(8);
+    expect(options?.dealerIds).toEqual(new Set(["bdf5A"]));
+    expect(text).toContain("## Føtex (1 items)");
+  });
+
+  it("does not group an offer whose display name matches but dealer ID is wrong", async () => {
+    vi.mocked(store.getHousehold).mockResolvedValue(
+      makeHousehold({
+        stores: [{ name: "Føtex", dealerId: "bdf5A", priority: 1 }],
+      }),
+    );
+    vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([["hakket oksekød", [makeOffer({ store: "Føtex", storeId: "wrong-id" })]]]),
+    );
+
+    const text = textOf(await callTool(stub, "generate_shopping_list", { recipes: ["Bolognese"] }));
+
+    expect(text).not.toContain("## Føtex");
+    expect(text).toContain("## Buy at regular price (1 items)");
   });
 
   it("honours an explicit people override", async () => {

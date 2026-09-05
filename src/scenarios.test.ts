@@ -673,15 +673,32 @@ describe("Scenario: Bundle offers per locale", () => {
 // ============================================================
 
 describe("Scenario: Preferred store filtering per country", () => {
-  it("matches stores case-insensitively (issue #1)", () => {
+  it("matches foetex/Føtex through their shared stable dealer ID", () => {
     const dk = getLocale("DK");
-    // User types "Føtex" but API returns "føtex"
-    const preferredStores = new Set(["Føtex"]);
-    const offer = makeOffer({ heading: "Hakket oksekød", store: "føtex" });
+    const preferredStores = [{ name: "foetex", dealerId: "bdf5A" }];
+    const offer = makeOffer({
+      heading: "Hakket oksekød",
+      store: "Føtex",
+      storeId: "bdf5A",
+    });
     const ing = makeIngredient({ searchTerms: ["oksekød"], category: "meat" });
     expect(
       scoreDealMatchCtx(offer, ing, "oksekød", buildMatchContext(preferredStores, dk)),
     ).toBeGreaterThan(0);
+  });
+
+  it("rejects the same preferred display name when the dealer ID differs", () => {
+    const dk = getLocale("DK");
+    const preferredStores = [{ name: "Føtex", dealerId: "bdf5A" }];
+    const offer = makeOffer({
+      heading: "Hakket oksekød",
+      store: "Føtex",
+      storeId: "wrong-id",
+    });
+    const ing = makeIngredient({ searchTerms: ["oksekød"], category: "meat" });
+    expect(scoreDealMatchCtx(offer, ing, "oksekød", buildMatchContext(preferredStores, dk))).toBe(
+      0,
+    );
   });
 
   it("matches REMA 1000 regardless of casing", () => {

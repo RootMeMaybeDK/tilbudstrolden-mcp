@@ -427,10 +427,18 @@ interface MatchIndicators {
   modifierPrepositions: string[];
 }
 
+export interface PreferredStoreIdentity {
+  name: string;
+  dealerId?: string;
+}
+
+export type PreferredStores = ReadonlySet<string> | readonly PreferredStoreIdentity[];
+
 /** Everything needed to score a deal that stays constant across one ingredient search. */
 export interface MatchContext {
-  preferredStores: Set<string>;
+  preferredStores: PreferredStoreIdentity[];
   indicators: MatchIndicators;
+  locale?: Locale;
 }
 
 function resolveIndicators(locale?: Locale): MatchIndicators {
@@ -443,18 +451,64 @@ function resolveIndicators(locale?: Locale): MatchIndicators {
   };
 }
 
-/** Build the per-search scoring context from preferred stores and an optional locale. */
-export function buildMatchContext(preferredStores: Set<string>, locale?: Locale): MatchContext {
-  return { preferredStores, indicators: resolveIndicators(locale) };
+function normalizePreferredStores(preferredStores: PreferredStores): PreferredStoreIdentity[] {
+  if (Array.isArray(preferredStores)) {
+    return preferredStores.map((store) => ({
+      name: store.name,
+      dealerId: store.dealerId?.trim() || undefined,
+    }));
+  }
+  return [...(preferredStores as ReadonlySet<string>)].map((name) => ({ name }));
 }
 
-// Case-insensitive: API returns "føtex" but users type "Føtex" or "Foetex".
-// Returns the matched-store bonus, or null if the offer should be rejected.
-function preferredStoreScore(offer: Offer, preferredStores: Set<string>): number | null {
-  if (preferredStores.size === 0) return 0;
-  const offerStoreLower = offer.store.toLowerCase();
-  for (const ps of preferredStores) {
-    if (ps.toLowerCase() === offerStoreLower) {
+/** Build the per-search scoring context from preferred stores and an optional locale. */
+export function buildMatchContext(preferredStores: PreferredStores, locale?: Locale): MatchContext {
+  return {
+    preferredStores: normalizePreferredStores(preferredStores),
+    indicators: resolveIndicators(locale),
+    locale,
+  };
+}
+
+/** Stable dealer IDs configured for preferred stores, used to scope API searches. */
+export function preferredDealerIds(preferredStores: PreferredStores): Set<string> {
+  return new Set(
+    normalizePreferredStores(preferredStores)
+      .map((store) => store.dealerId?.trim())
+      .filter((id): id is string => Boolean(id)),
+  );
+}
+
+function storeNamesMatch(offerName: string, preferredName: string, locale?: Locale): boolean {
+  const offerKey = offerName.trim().toLowerCase();
+  const preferredKey = preferredName.trim().toLowerCase();
+  if (offerKey === preferredKey) return true;
+
+  const offerDealerId = locale?.knownStores[offerKey];
+  const preferredDealerId = locale?.knownStores[preferredKey];
+  return Boolean(offerDealerId && preferredDealerId && offerDealerId === preferredDealerId);
+}
+
+// Dealer ID is authoritative when both sides have one. Name matching is only a
+// compatibility fallback for a preference or offer without a stable ID.
+function preferredStoreScore(offer: Offer, ctx: MatchContext): number | null {
+  if (ctx.preferredStores.length === 0) return 0;
+
+  if (offer.storeId) {
+    const storesWithIds = ctx.preferredStores.filter((store) => store.dealerId);
+    if (storesWithIds.some((store) => store.dealerId === offer.storeId)) {
+      return SCORE.PREFERRED_STORE_BONUS;
+    }
+
+    const legacyStores = ctx.preferredStores.filter((store) => !store.dealerId);
+    if (legacyStores.some((store) => storeNamesMatch(offer.store, store.name, ctx.locale))) {
+      return SCORE.PREFERRED_STORE_BONUS;
+    }
+    return null;
+  }
+
+  for (const store of ctx.preferredStores) {
+    if (storeNamesMatch(offer.store, store.name, ctx.locale)) {
       return SCORE.PREFERRED_STORE_BONUS;
     }
   }
@@ -504,7 +558,7 @@ export function scoreDealMatchCtx(
 
   if (ind.nonIngredient.some((s) => heading.includes(s))) return 0;
 
-  const storeBonus = preferredStoreScore(offer, ctx.preferredStores);
+  const storeBonus = preferredStoreScore(offer, ctx);
   if (storeBonus === null) return 0;
 
   const isBundleHeading = ind.bundlePatterns.some((p) => heading.includes(p));
@@ -568,7 +622,7 @@ function dedupOffersByBestScore(
 export function findBestDeal(
   ing: { searchTerms: string[]; category: string; name: string },
   dealMap: Map<string, Offer[]>,
-  preferredStores: Set<string>,
+  preferredStores: PreferredStores,
   locale?: Locale,
 ): DealSearchResult {
   const searchTerms = expandSearchTerms(ing.searchTerms, locale?.synonymMap);
