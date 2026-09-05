@@ -1,9 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getLocale } from "../locales.js";
 import { calculateBasketCost, findOptimalWeek } from "../scoring.js";
+import { scoreRecipes } from "../services/scoring-service.js";
 import * as store from "../store.js";
-import { scoreAllRecipes } from "./scoring.js";
 import { errorResult } from "./shared.js";
 import { buildShoppingList } from "./shopping-list.js";
 
@@ -89,18 +88,7 @@ function formatMealPlan(
 async function handlePlanAndShop(args: PlanArgs) {
   try {
     const { days, people } = args;
-    const household = await store.getHousehold();
-    const locale = getLocale(household.country);
-    const pantry = await store.getPantry();
-    const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
-    const householdSize = people ?? (household.people.length || household.defaultServings);
-
-    const { scored, dealMap: cachedDeals } = await scoreAllRecipes(
-      household.stores,
-      pantrySet,
-      householdSize,
-      locale,
-    );
+    const { scored, dealMap: cachedDeals, householdSize, locale } = await scoreRecipes({ people });
 
     if (scored.length < days) {
       return errorResult(

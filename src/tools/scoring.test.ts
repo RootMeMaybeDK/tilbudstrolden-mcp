@@ -1,5 +1,5 @@
 /**
- * Unit tests for src/tools/scoring.ts — scoreAllRecipes and the score_recipes tool.
+ * Unit tests for the scoring service and the score_recipes tool.
  *
  * The api and store layers are mocked; src/scoring.ts (matching, costing,
  * weekly optimisation) runs for real, so these exercise the whole scoring
@@ -25,7 +25,8 @@ vi.mock("../store.js", () => ({
 
 const api = await import("../api.js");
 const store = await import("../store.js");
-const { registerScoringTools, scoreAllRecipes } = await import("./scoring.js");
+const { scoreAllRecipes } = await import("../services/scoring-service.js");
+const { registerScoringTools } = await import("./scoring.js");
 
 function makeOffer(overrides: Partial<Offer> = {}): Offer {
   return {
@@ -522,6 +523,33 @@ describe("score_recipes tool", () => {
     expect(text).toContain("Confirmed deals:");
     expect(text).not.toContain("Estimated total");
     expect(text).toContain("Hakket oksekød (500g): Hakket oksekød 8-12% — 23 DKK @ Netto");
+  });
+
+  it("preserves the complete deterministic score output", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(new Map([["hakket oksekød", [beefOffer]]]));
+
+    const text = textOf(await callTool(stub, "score_recipes", {}));
+
+    expect(text).toBe(
+      [
+        "# Recipe scores (1 recipes)",
+        "",
+        "## Bolognese",
+        "   medium | italian | beef | 4 servings",
+        "   Matched-deal ingredient estimate: 22.5 DKK (not a full recipe price)",
+        "   Confirmed deal estimate: 22.5 DKK",
+        "   Uncertain-match estimate: 0 DKK",
+        "   Confirmed matches: 1",
+        "   Uncertain matches: 0",
+        "   Items without matched deal price: 0",
+        "   Confirmed deal coverage: 100%",
+        "   Candidate deal coverage: 100%",
+        "   Confirmed deals:",
+        "     Hakket oksekød (500g): Hakket oksekød 8-12% — 23 DKK @ Netto",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("passes household dealer IDs to retrieval and accepts foetex/Føtex by stable ID", async () => {

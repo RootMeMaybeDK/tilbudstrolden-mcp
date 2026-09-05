@@ -1034,6 +1034,9 @@ describe("plan_and_shop", () => {
     expect(text).toContain("Day 1:");
     expect(text).toContain("Day 3:");
     expect(text).not.toContain("Day 4:");
+    expect(text).toContain("Day 1: Recipe 1");
+    expect(text).toContain("Day 2: Recipe 2");
+    expect(text).toContain("Day 3: Recipe 3");
     // Plan and shopping list are separated by a horizontal rule.
     const divider = text.indexOf("\n---\n");
     expect(divider).toBeGreaterThan(-1);

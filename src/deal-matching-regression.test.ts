@@ -15,7 +15,7 @@ vi.mock("./store.js", async (importOriginal) => {
 });
 
 const store = await import("./store.js");
-const { scoreAllRecipes } = await import("./tools/scoring.js");
+const { scoreAllRecipes } = await import("./services/scoring-service.js");
 const { buildShoppingList } = await import("./tools/shopping-list.js");
 
 const household: Household = {

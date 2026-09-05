@@ -1,173 +1,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Offer } from "../api.js";
-import { internalDealCandidateLimit, searchDealsBatch } from "../api.js";
-import { getLocale, type Locale } from "../locales.js";
+import type { Locale } from "../locales.js";
 import {
   calculateBasketCost,
-  computeIngredientCost,
   type DealCandidate,
-  expandSearchTerms,
-  findBestDeal,
   findOptimalWeek,
-  type PreferredStores,
-  preferredDealerIds,
   type ScoredIngredient,
   type ScoredRecipe,
   summarizeDealMatches,
   summarizeRecipePrices,
 } from "../scoring.js";
-import * as store from "../store.js";
+import { scoreRecipes } from "../services/scoring-service.js";
 import { errorResult } from "./shared.js";
-
-/** Everything a recipe needs to be scored against the current deal map */
-interface ScoringContext {
-  dealMap: Map<string, Offer[]>;
-  preferredStores: PreferredStores;
-  pantrySet: Set<string>;
-  householdSize: number;
-  locale?: Locale;
-}
-
-/** Map the low-confidence alternatives onto the reportable candidate shape */
-function toDealCandidates(result: ReturnType<typeof findBestDeal>): DealCandidate[] | undefined {
-  if (result.confidence !== "low") return undefined;
-  return result.candidates.map((c) => ({
-    heading: c.offer.heading,
-    price: c.offer.price ?? 0,
-    store: c.offer.store,
-    score: c.score,
-  }));
-}
-
-function scoreOneIngredient(
-  ing: store.Ingredient,
-  servings: number,
-  ctx: ScoringContext,
-): ScoredIngredient {
-  const result = findBestDeal(ing, ctx.dealMap, ctx.preferredStores, ctx.locale);
-  const cost = result.best
-    ? computeIngredientCost(result.best, ing.quantity, servings, ctx.householdSize)
-    : 0;
-
-  return {
-    name: ing.name,
-    quantity: ing.quantity,
-    category: ing.category,
-    bestDeal: result.best
-      ? {
-          heading: result.best.heading,
-          price: cost,
-          store: result.best.store,
-        }
-      : null,
-    estimatedCost: cost,
-    confidence: result.confidence,
-    candidates: toDealCandidates(result),
-  };
-}
-
-function scoreOneRecipe(recipe: store.Recipe, ctx: ScoringContext): ScoredRecipe {
-  let totalCost = 0;
-  let withDeals = 0;
-  let nonPantryCount = 0;
-  const ingredients: ScoredIngredient[] = [];
-
-  for (const ing of recipe.ingredients) {
-    if (ctx.pantrySet.has(ing.name.toLowerCase())) continue;
-    nonPantryCount++;
-
-    const scoredIngredient = scoreOneIngredient(ing, recipe.servings, ctx);
-    ingredients.push(scoredIngredient);
-    if (scoredIngredient.bestDeal) {
-      totalCost += scoredIngredient.estimatedCost;
-      withDeals++;
-    }
-  }
-
-  const summaryItems = ingredients.map((ingredient) => ({
-    confidence: ingredient.confidence,
-    amount: ingredient.estimatedCost,
-  }));
-  const matchSummary = summarizeDealMatches(summaryItems);
-  const priceSummary = summarizeRecipePrices(summaryItems, ctx.locale?.currency ?? "DKK");
-  const estimatedCost = Math.round(totalCost * 100) / 100;
-  const dealCoverage = nonPantryCount > 0 ? Math.round((withDeals / nonPantryCount) * 100) : 100;
-
-  return {
-    name: recipe.name,
-    servings: recipe.servings,
-    complexity: recipe.complexity,
-    proteinType: recipe.proteinType,
-    cuisineType: recipe.cuisineType,
-    // Legacy fields intentionally retain their existing numerical semantics.
-    estimatedCost,
-    dealCoverage,
-    ingredients,
-    matchSummary,
-    priceSummary,
-  };
-}
-
-interface ScoreResult {
-  scored: ScoredRecipe[];
-  dealMap: Map<string, Offer[]>;
-}
-
-/** Every unique, synonym-expanded search term across all non-pantry ingredients */
-function collectSearchTerms(
-  recipes: store.Recipe[],
-  pantrySet: Set<string>,
-  locale?: Locale,
-): Set<string> {
-  const allTerms = new Set<string>();
-  for (const recipe of recipes) {
-    for (const ing of recipe.ingredients) {
-      if (pantrySet.has(ing.name.toLowerCase())) continue;
-      for (const term of expandSearchTerms(ing.searchTerms, locale?.synonymMap)) {
-        allTerms.add(term);
-      }
-    }
-  }
-  return allTerms;
-}
-
-export async function scoreAllRecipes(
-  preferredStores: PreferredStores,
-  pantrySet: Set<string>,
-  householdSize: number,
-  locale?: Locale,
-): Promise<ScoreResult> {
-  const recipes = await store.getRecipes();
-  if (recipes.length === 0) return { scored: [], dealMap: new Map() };
-
-  // Batch fetch all deals in parallel
-  const allTerms = collectSearchTerms(recipes, pantrySet, locale);
-  const countryId = locale?.country ?? "DK";
-  const dealerIds = preferredDealerIds(preferredStores);
-  const dealMap = await searchDealsBatch(
-    [...allTerms],
-    internalDealCandidateLimit(dealerIds),
-    countryId,
-    {
-      dealerIds,
-    },
-  );
-
-  // Score each recipe
-  const scored: ScoredRecipe[] = recipes.map((recipe) =>
-    scoreOneRecipe(recipe, { dealMap, preferredStores, pantrySet, householdSize, locale }),
-  );
-
-  scored.sort((a, b) => {
-    // Primary: higher deal coverage is better
-    if (b.dealCoverage !== a.dealCoverage) return b.dealCoverage - a.dealCoverage;
-    // Secondary: lower cost is better
-    return a.estimatedCost - b.estimatedCost;
-  });
-
-  return { scored, dealMap };
-}
 
 function formatRecipeHeader(r: ScoredRecipe, currency: string): string[] {
   const summaryItems = r.ingredients.map((ingredient) => ({
@@ -317,12 +161,7 @@ function formatOptimizedPlan(
 
 async function handleScoreRecipes(args: ScoreRecipesArgs) {
   try {
-    const household = await store.getHousehold();
-    const locale = getLocale(household.country);
-    const pantry = await store.getPantry();
-    const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
-    const householdSize = household.people.length || household.defaultServings;
-    const { scored } = await scoreAllRecipes(household.stores, pantrySet, householdSize, locale);
+    const { scored, locale } = await scoreRecipes();
 
     const parts = [
       `# Recipe scores (${scored.length} recipes)\n`,
