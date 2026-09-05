@@ -353,6 +353,176 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("need 0.375 stk + 0.375 stk = 0.75 stk");
   });
 
+  it.each([
+    ["Olivenolie", "2 spsk", 500, "ml"],
+    ["Hvidløg", "2 fed", 1, "stk"],
+  ])("uses sticker-price fallback for semantic quantity %s against an incompatible offer pack", async (name, quantity, offerQuantity, offerUnit) => {
+    const recipe = beefRecipe({
+      ingredients: [
+        {
+          name,
+          quantity,
+          searchTerms: [name.toLowerCase()],
+          category: "produce",
+        },
+      ],
+    });
+    vi.mocked(store.getRecipes).mockResolvedValue([recipe]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          name.toLowerCase(),
+          [
+            makeOffer({
+              id: name,
+              heading: name,
+              price: 8,
+              quantity: offerQuantity,
+              unit: offerUnit,
+            }),
+          ],
+        ],
+      ]),
+    );
+
+    const text = textOf(
+      await callTool(stub, "generate_shopping_list", {
+        recipes: ["Bolognese"],
+        people: 4,
+      }),
+    );
+
+    expect(text).toContain(`${name} (${quantity}): ${name} - 8 DKK`);
+    expect(text).not.toContain("/pack");
+    expect(text).toContain("Matched-deal purchase subtotal: 8 DKK");
+  });
+
+  it("uses metric pack calculation for a liter recipe quantity", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Grøntsagsbouillon",
+            quantity: "1 liter",
+            searchTerms: ["grøntsagsbouillon"],
+            category: "pantry",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "grøntsagsbouillon",
+          [
+            makeOffer({
+              id: "stock",
+              heading: "Grøntsagsbouillon",
+              price: 10,
+              quantity: 500,
+              unit: "ml",
+              pricePerUnit: "20.00 kr/L",
+            }),
+          ],
+        ],
+      ]),
+    );
+
+    const text = textOf(
+      await callTool(stub, "generate_shopping_list", {
+        recipes: ["Bolognese"],
+        people: 4,
+      }),
+    );
+
+    expect(text).toContain("Grøntsagsbouillon: need 1 L -> 2 x 10 kr = 20 kr");
+    expect(text).toContain("[5 dl/pack, 20.00 kr/L]");
+  });
+
+  it("scales mixed-unit contributions but falls back once without first-item pack maths", async () => {
+    const recipes = [
+      beefRecipe({
+        name: "Recipe A",
+        ingredients: [
+          {
+            name: "Bacon",
+            quantity: "250 g",
+            searchTerms: ["bacon"],
+            category: "meat",
+          },
+        ],
+      }),
+      beefRecipe({
+        name: "Recipe B",
+        ingredients: [
+          {
+            name: "Bacon",
+            quantity: "3 skiver",
+            searchTerms: ["bacon"],
+            category: "meat",
+          },
+        ],
+      }),
+    ];
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "bacon",
+          [makeOffer({ id: "bacon", heading: "Bacon", price: 20, quantity: 200, unit: "g" })],
+        ],
+      ]),
+    );
+
+    const result = await buildShoppingListResult(recipes, 3);
+
+    expect(result.text).toContain("Bacon (187.5 g + 2.25 skiver): Bacon - 20 DKK");
+    expect(result.text).not.toContain("Bacon: need");
+    expect(result.text).not.toContain("/pack");
+    expect(result.text).not.toContain("187.5 g + 2.25 skiver =");
+    expect(result.grandTotal).toBe(20);
+  });
+
+  it("aggregates the same semantic unit and uses one sticker-price fallback", async () => {
+    const recipes = [
+      beefRecipe({
+        name: "Recipe A",
+        ingredients: [
+          {
+            name: "Hvidløg",
+            quantity: "2 fed",
+            searchTerms: ["hvidløg"],
+            category: "produce",
+          },
+        ],
+      }),
+      beefRecipe({
+        name: "Recipe B",
+        ingredients: [
+          {
+            name: "Hvidløg",
+            quantity: "1 fed",
+            searchTerms: ["hvidløg"],
+            category: "produce",
+          },
+        ],
+      }),
+    ];
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "hvidløg",
+          [makeOffer({ id: "garlic", heading: "Hvidløg", price: 8, quantity: 1, unit: "stk" })],
+        ],
+      ]),
+    );
+
+    const result = await buildShoppingListResult(recipes, 4);
+
+    expect(result.text).toContain("Hvidløg (2 fed + 1 fed = 3 fed): Hvidløg - 8 DKK");
+    expect(result.text).not.toContain("/pack");
+    expect(result.grandTotal).toBe(8);
+  });
+
   it("puts unmatched ingredients in the regular-price section with their source recipes", async () => {
     const recipes = [
       beefRecipe({
@@ -441,7 +611,7 @@ describe("generate_shopping_list", () => {
         excludePantry: false,
       }),
     );
-    expect(text).toContain("- Salt (1 tsk) [Bolognese]");
+    expect(text).toContain("- Salt (0.5 tsk) [Bolognese]");
     expect(text).not.toContain("Skipped (in pantry)");
   });
 
@@ -713,9 +883,9 @@ describe("generate_shopping_list", () => {
     );
   });
 
-  it("falls back to the sticker price when the quantity cannot be parsed", async () => {
-    // "2 fed" (2 cloves) has no convertible unit, so pack maths is impossible
-    // and the line must degrade to the raw offer price rather than guessing.
+  it("falls back to the sticker price when a semantic unit is pack-incompatible", async () => {
+    // "2 fed" can be scaled as a recipe requirement but cannot be converted
+    // to the offer's stk unit, so the line uses the raw offer price.
     vi.mocked(store.getRecipes).mockResolvedValue([
       beefRecipe({
         ingredients: [
@@ -751,7 +921,7 @@ describe("generate_shopping_list", () => {
       }),
     );
     expect(text).toContain(
-      "Hvidløg (2 fed): Hvidløg - 8 DKK (90.00 kr/kg) @ Netto until 2026-06-30",
+      "Hvidløg (1 fed): Hvidløg - 8 DKK (90.00 kr/kg) @ Netto until 2026-06-30",
     );
     expect(text).not.toContain("/pack");
     expect(text).toContain("Matched-deal purchase subtotal: 8 DKK");
@@ -793,7 +963,7 @@ describe("generate_shopping_list", () => {
         recipes: ["Bolognese"],
       }),
     );
-    expect(text).toContain("Hvidløg (2 fed): Hvidløg - 8 DKK @ Netto until 2026-06-30");
+    expect(text).toContain("Hvidløg (1 fed): Hvidløg - 8 DKK @ Netto until 2026-06-30");
   });
 
   it("returns a structured error when the deal lookup fails", async () => {

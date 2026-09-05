@@ -256,6 +256,21 @@ describe("parseQuantity", () => {
     expect(parseQuantity("0,5 l")).toEqual({ amount: 500, unit: "ml" });
   });
 
+  it.each([
+    ["1 liter", 1000, "ml"],
+    ["0.5 liter", 500, "ml"],
+    ["1,5 liter", 1500, "ml"],
+    ["2spsk", 2, "spsk"],
+    ["0.75 tsk", 0.75, "tsk"],
+    ["3 fed", 3, "fed"],
+    ["3 FED", 3, "fed"],
+    ["4 skiver", 4, "skiver"],
+    ["2 stængler", 2, "stængler"],
+    ["1.5 håndfuld", 1.5, "håndfuld"],
+  ])("parses simple culinary quantity %s", (quantity, amount, unit) => {
+    expect(parseQuantity(quantity)).toEqual({ amount, unit });
+  });
+
   it("parses stk", () => {
     expect(parseQuantity("2 stk")).toEqual({ amount: 2, unit: "stk" });
   });
@@ -269,9 +284,18 @@ describe("parseQuantity", () => {
   });
 
   it("returns null for unknown units", () => {
-    expect(parseQuantity("3 fed")).toBeNull();
-    expect(parseQuantity("2 spsk")).toBeNull();
-    expect(parseQuantity("2 stængler")).toBeNull();
+    expect(parseQuantity("1 bundt")).toBeNull();
+    expect(parseQuantity("2 knivspids")).toBeNull();
+  });
+
+  it.each([
+    "2-3 spsk",
+    "4-5 fed",
+    "3 spsk + 1 tsk",
+    "2 spsk (hakket)",
+    "ca 1600 g",
+  ])("keeps complex quantity %s unparseable", (quantity) => {
+    expect(parseQuantity(quantity)).toBeNull();
   });
 
   it("returns null for zero amount", () => {
@@ -404,6 +428,60 @@ describe("quantity precision and aggregation", () => {
     ).toEqual({ totalAmount: 200, unit: "ml" });
   });
 
+  it("treats liter as a metric alias during aggregation and display", () => {
+    const aggregated = aggregateQuantities(
+      [
+        { quantity: "1 liter", recipeServings: 4 },
+        { quantity: "5 dl", recipeServings: 4 },
+      ],
+      4,
+    );
+
+    expect(aggregated).toEqual({ totalAmount: 1500, unit: "ml" });
+    expect(formatQuantity(aggregated?.totalAmount ?? 0, aggregated?.unit ?? "ml")).toBe("1.5 L");
+  });
+
+  it.each([
+    ["2 fed", 3, 1.5, "fed"],
+    ["1 spsk", 2, 0.5, "spsk"],
+    ["0.5 håndfuld", 3, 0.375, "håndfuld"],
+  ])("scales semantic quantity %s from four servings to %i people", (quantity, people, totalAmount, unit) => {
+    expect(aggregateQuantities([{ quantity, recipeServings: 4 }], people)).toEqual({
+      totalAmount,
+      unit,
+    });
+  });
+
+  it.each([
+    ["2 fed", "1 fed", 3, "fed"],
+    ["2 skiver", "4 skiver", 6, "skiver"],
+  ])("aggregates matching semantic units %s and %s", (first, second, totalAmount, unit) => {
+    expect(
+      aggregateQuantities(
+        [
+          { quantity: first, recipeServings: 4 },
+          { quantity: second, recipeServings: 4 },
+        ],
+        4,
+      ),
+    ).toEqual({ totalAmount, unit });
+  });
+
+  it.each([
+    ["2 fed", "100 g"],
+    ["1 spsk", "3 tsk"],
+  ])("does not aggregate incompatible units %s and %s", (first, second) => {
+    expect(
+      aggregateQuantities(
+        [
+          { quantity: first, recipeServings: 4 },
+          { quantity: second, recipeServings: 4 },
+        ],
+        4,
+      ),
+    ).toBeNull();
+  });
+
   it("formats fractional requirements without noise or trailing zeroes", () => {
     expect(formatQuantity(0.37500000000000006, "stk")).toBe("0.375 stk");
     expect(formatQuantity(0.25, "stk")).toBe("0.25 stk");
@@ -448,10 +526,10 @@ describe("computeIngredientCost", () => {
     expect(cost).toBeCloseTo(4, 2);
   });
 
-  it("falls back to sticker price * scale for unknown units", () => {
+  it("falls back to sticker price * scale for a pack-incompatible semantic unit", () => {
     const offer = makeOffer({ price: 25 });
     const cost = computeIngredientCost(offer, "3 fed", 4, 4);
-    // Can't parse "fed", falls back to 25 * (4/4) = 25
+    // "fed" cannot be compared with the offer's gram pack.
     expect(cost).toBe(25);
   });
 
@@ -533,6 +611,35 @@ describe("computeShoppingCost", () => {
   it("returns null for incompatible units", () => {
     const offer = makeOffer({ price: 20, quantity: 500, unit: "ml" });
     expect(computeShoppingCost(offer, "500 g", 4, 3)).toBeNull();
+  });
+
+  it("keeps semantic recipe units incompatible with offer packs", () => {
+    expect(computeShoppingCost(makeOffer({ quantity: 1, unit: "stk" }), "2 fed", 4, 3)).toBeNull();
+    expect(
+      computeShoppingCost(makeOffer({ quantity: 200, unit: "g" }), "3 skiver", 4, 3),
+    ).toBeNull();
+    expect(
+      computeShoppingCost(makeOffer({ quantity: 500, unit: "ml" }), "2 spsk", 4, 3),
+    ).toBeNull();
+    expect(computeShoppingCost(makeOffer({ quantity: 2, unit: "fed" }), "2 fed", 4, 3)).toBeNull();
+  });
+
+  it("uses metric pack calculation for the liter alias", () => {
+    const result = computeShoppingCost(
+      makeOffer({ price: 10, quantity: 500, unit: "ml" }),
+      "1 liter",
+      4,
+      4,
+    );
+
+    expect(result).toMatchObject({
+      quantityNeeded: 1000,
+      unitNeeded: "ml",
+      packSize: 500,
+      packsNeeded: 2,
+      totalCost: 20,
+      leftover: 0,
+    });
   });
 });
 

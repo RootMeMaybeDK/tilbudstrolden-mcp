@@ -9,18 +9,35 @@ import type { Ingredient } from "./store.js";
 
 export interface ParsedQuantity {
   amount: number;
-  unit: string; // normalized: "g", "ml", "stk", or original if unknown
+  unit: string; // canonical metric, count, or recipe-only semantic unit
 }
 
-/** Multipliers to convert common SI/retail units to base units (g or ml). */
-const UNIT_CONVERSIONS: Record<string, { base: string; factor: number }> = {
+interface UnitConversion {
+  base: string;
+  factor: number;
+}
+
+/** Units with documented retail pack semantics. */
+const RETAIL_UNIT_CONVERSIONS: Record<string, UnitConversion> = {
   g: { base: "g", factor: 1 },
   kg: { base: "g", factor: 1000 },
   ml: { base: "ml", factor: 1 },
   cl: { base: "ml", factor: 10 },
   dl: { base: "ml", factor: 100 },
   l: { base: "ml", factor: 1000 },
+  liter: { base: "ml", factor: 1000 },
   stk: { base: "stk", factor: 1 },
+};
+
+/** Recipe quantities include cooking measures that must not imply pack compatibility. */
+const RECIPE_UNIT_CONVERSIONS: Record<string, UnitConversion> = {
+  ...RETAIL_UNIT_CONVERSIONS,
+  spsk: { base: "spsk", factor: 1 },
+  tsk: { base: "tsk", factor: 1 },
+  fed: { base: "fed", factor: 1 },
+  skiver: { base: "skiver", factor: 1 },
+  stængler: { base: "stængler", factor: 1 },
+  håndfuld: { base: "håndfuld", factor: 1 },
 };
 
 const QUANTITY_PRECISION_FACTOR = 1_000_000;
@@ -42,7 +59,7 @@ function formatQuantityNumber(amount: number): string {
 
 /**
  * Parse a recipe quantity string into amount + normalized unit.
- * Returns null for unparseable quantities ("efter smag", "3 fed", etc.)
+ * Returns null for unparseable quantities ("efter smag", ranges, compounds, etc.)
  */
 export function parseQuantity(qty: string): ParsedQuantity | null {
   const trimmed = qty.trim().toLowerCase();
@@ -55,7 +72,7 @@ export function parseQuantity(qty: string): ParsedQuantity | null {
   if (Number.isNaN(amount) || amount <= 0) return null;
 
   const rawUnit = match[2];
-  const conversion = UNIT_CONVERSIONS[rawUnit];
+  const conversion = RECIPE_UNIT_CONVERSIONS[rawUnit];
   if (!conversion) return null;
 
   return { amount: amount * conversion.factor, unit: conversion.base };
@@ -66,7 +83,7 @@ export function parseQuantity(qty: string): ParsedQuantity | null {
 export interface ShoppingCost {
   /** Quantity needed scaled for household */
   quantityNeeded: number;
-  /** Normalized unit ("g", "ml", "stk") */
+  /** Canonical unit needed by the recipe */
   unitNeeded: string;
   /** How much one pack contains (in base units) */
   packSize: number;
@@ -99,7 +116,7 @@ function getOfferPackInfo(offer: Offer): OfferPackInfo | null {
   const offerUnit = offer.unit?.toLowerCase();
   if (!offerUnit) return null;
 
-  const conversion = UNIT_CONVERSIONS[offerUnit];
+  const conversion = RETAIL_UNIT_CONVERSIONS[offerUnit];
   if (!conversion) return null;
 
   return {

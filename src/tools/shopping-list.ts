@@ -94,21 +94,20 @@ function buildDisplayQuantity(
 ): { displayQty: string; aggregated: ReturnType<typeof aggregateQuantities> } {
   const aggregated = aggregateQuantities(ing.contributions, householdSize);
 
+  const scaledContributions = ing.contributions.map((c) => {
+    const parsed = parseQuantity(c.quantity);
+    if (!parsed) return c.quantity;
+    const scale = c.recipeServings > 0 ? householdSize / c.recipeServings : 1;
+    return formatQuantity(parsed.amount * scale, parsed.unit);
+  });
+
   let displayQty: string;
   if (ing.contributions.length > 1 && aggregated) {
-    const perRecipe = ing.contributions
-      .map((c) => {
-        const p = parseQuantity(c.quantity);
-        if (!p) return c.quantity;
-        const scale = c.recipeServings > 0 ? householdSize / c.recipeServings : 1;
-        return formatQuantity(p.amount * scale, p.unit);
-      })
-      .join(" + ");
-    displayQty = `${perRecipe} = ${formatQuantity(aggregated.totalAmount, aggregated.unit)}`;
+    displayQty = `${scaledContributions.join(" + ")} = ${formatQuantity(aggregated.totalAmount, aggregated.unit)}`;
   } else if (aggregated) {
     displayQty = formatQuantity(aggregated.totalAmount, aggregated.unit);
   } else {
-    displayQty = ing.contributions.map((c) => c.quantity).join(" + ");
+    displayQty = scaledContributions.join(" + ");
   }
 
   return { displayQty, aggregated };
@@ -132,7 +131,7 @@ function formatIngredientDeal(
   let shopping = aggregated
     ? computeShoppingCostFromTotal(best, aggregated.totalAmount, aggregated.unit)
     : null;
-  if (!shopping) {
+  if (!shopping && ing.contributions.length === 1) {
     shopping = computeShoppingCost(
       best,
       ing.contributions[0].quantity,
