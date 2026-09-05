@@ -95,7 +95,7 @@ function buildDisplayQuantity(
         const p = parseQuantity(c.quantity);
         if (!p) return c.quantity;
         const scale = c.recipeServings > 0 ? householdSize / c.recipeServings : 1;
-        return formatQuantity(Math.round(p.amount * scale), p.unit);
+        return formatQuantity(p.amount * scale, p.unit);
       })
       .join(" + ");
     displayQty = `${perRecipe} = ${formatQuantity(aggregated.totalAmount, aggregated.unit)}`;

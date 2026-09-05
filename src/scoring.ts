@@ -23,6 +23,23 @@ const UNIT_CONVERSIONS: Record<string, { base: string; factor: number }> = {
   stk: { base: "stk", factor: 1 },
 };
 
+const QUANTITY_PRECISION_FACTOR = 1_000_000;
+const DISPLAY_PRECISION_FACTOR = 1_000;
+
+/** Stabilize quantity arithmetic without rounding requirements to whole units. */
+export function normalizeQuantity(amount: number): number {
+  if (!Number.isFinite(amount)) return amount;
+  const normalized = Math.round(amount * QUANTITY_PRECISION_FACTOR) / QUANTITY_PRECISION_FACTOR;
+  return Object.is(normalized, -0) ? 0 : normalized;
+}
+
+/** Format a quantity with at most three decimals and no trailing zeroes. */
+function formatQuantityNumber(amount: number): string {
+  return String(
+    Math.round(normalizeQuantity(amount) * DISPLAY_PRECISION_FACTOR) / DISPLAY_PRECISION_FACTOR,
+  );
+}
+
 /**
  * Parse a recipe quantity string into amount + normalized unit.
  * Returns null for unparseable quantities ("efter smag", "3 fed", etc.)
@@ -98,15 +115,17 @@ function buildShoppingCost(
   totalAmount: number,
   unit: string,
 ): ShoppingCost {
-  const packsNeeded = Math.ceil(totalAmount / pack.packSize);
+  const quantityNeeded = normalizeQuantity(totalAmount);
+  const packSize = normalizeQuantity(pack.packSize);
+  const packsNeeded = Math.ceil(normalizeQuantity(quantityNeeded / packSize));
   return {
-    quantityNeeded: Math.round(totalAmount),
+    quantityNeeded,
     unitNeeded: unit,
-    packSize: Math.round(pack.packSize),
+    packSize,
     packsNeeded,
     pricePerPack: pack.price,
     totalCost: packsNeeded * pack.price,
-    leftover: Math.round(packsNeeded * pack.packSize - totalAmount),
+    leftover: normalizeQuantity(packsNeeded * packSize - quantityNeeded),
     unitPrice: offer.pricePerUnit,
   };
 }
@@ -204,7 +223,7 @@ export function aggregateQuantities(
   }
 
   if (baseUnit === null || totalAmount <= 0) return null;
-  return { totalAmount: Math.round(totalAmount), unit: baseUnit };
+  return { totalAmount: normalizeQuantity(totalAmount), unit: baseUnit };
 }
 
 /**
@@ -221,7 +240,7 @@ export function formatQuantity(amount: number, unit: string): string {
   if (unit === "ml" && amount >= 100) {
     return `${(amount / 100).toFixed(1).replace(/\.0$/, "")} dl`;
   }
-  return `${amount} ${unit}`;
+  return `${formatQuantityNumber(amount)} ${unit}`;
 }
 
 // --- Types ---

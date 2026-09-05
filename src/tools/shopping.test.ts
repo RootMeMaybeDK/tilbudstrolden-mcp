@@ -222,6 +222,107 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("-> 45 kr = 45 kr");
   });
 
+  it("keeps Tomatrisotto's fractional lemon requirement separate from purchase quantity", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        name: "Tomatrisotto",
+        servings: 4,
+        proteinType: "vegetarian",
+        ingredients: [
+          {
+            name: "Citron",
+            quantity: "0.5 stk",
+            searchTerms: ["citron"],
+            category: "produce",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "citron",
+          [
+            makeOffer({
+              id: "lemon",
+              heading: "Citron",
+              price: 5,
+              quantity: 1,
+              unit: "stk",
+              pricePerUnit: null,
+            }),
+          ],
+        ],
+      ]),
+    );
+
+    const text = textOf(
+      await callTool(stub, "generate_shopping_list", {
+        recipes: ["Tomatrisotto"],
+        people: 3,
+      }),
+    );
+
+    expect(text).toContain("Citron: need 0.375 stk -> 5 kr = 5 kr");
+    expect(text).toContain("[1 stk/pack]");
+    expect(text).not.toContain("need 0 stk");
+  });
+
+  it("shows fractional contributions before aggregation", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        name: "Recipe A",
+        servings: 4,
+        ingredients: [
+          {
+            name: "Citron",
+            quantity: "0.5 stk",
+            searchTerms: ["citron"],
+            category: "produce",
+          },
+        ],
+      }),
+      beefRecipe({
+        name: "Recipe B",
+        servings: 4,
+        ingredients: [
+          {
+            name: "Citron",
+            quantity: "0.5 stk",
+            searchTerms: ["citron"],
+            category: "produce",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "citron",
+          [
+            makeOffer({
+              id: "lemon",
+              heading: "Citron",
+              price: 5,
+              quantity: 1,
+              unit: "stk",
+              pricePerUnit: null,
+            }),
+          ],
+        ],
+      ]),
+    );
+
+    const text = textOf(
+      await callTool(stub, "generate_shopping_list", {
+        recipes: ["Recipe A", "Recipe B"],
+        people: 3,
+      }),
+    );
+
+    expect(text).toContain("need 0.375 stk + 0.375 stk = 0.75 stk");
+  });
+
   it("puts unmatched ingredients in the regular-price section with their source recipes", async () => {
     vi.mocked(store.getRecipes).mockResolvedValue([
       beefRecipe({
@@ -241,7 +342,7 @@ describe("generate_shopping_list", () => {
       }),
     );
     expect(text).toContain("## Buy at regular price (1 items)");
-    expect(text).toContain("- Enhjørning (1 stk) [Bolognese]");
+    expect(text).toContain("- Enhjørning (0.5 stk) [Bolognese]");
     expect(text).toContain("Estimated register total (deals only): ~0 kr");
   });
 
