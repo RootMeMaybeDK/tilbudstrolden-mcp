@@ -310,6 +310,8 @@ export async function buildShoppingListResult(
   const priceSummary = summarizeShoppingPrices(summaryItems, locale.currency);
   const text = formatShoppingOutput({
     ...tally,
+    matchSummary,
+    priceSummary,
     selectedRecipes,
     householdSize,
     pantry,
@@ -406,10 +408,17 @@ function formatShoppingOutput(ctx: {
   expiringWarnings: string[];
   pantry: string[];
   currencySymbol: string;
+  matchSummary: DealMatchSummary;
+  priceSummary: ShoppingPriceSummary;
 }): string {
   const parts: string[] = [
     `Shopping list for: ${ctx.selectedRecipes.map((r) => r.name).join(", ")} (${ctx.householdSize} people)`,
-    `Estimated register total (deals only): ~${Math.round(ctx.grandTotal)} ${ctx.currencySymbol}`,
+    `Matched-deal purchase subtotal: ${ctx.priceSummary.matchedPurchaseSubtotal} ${ctx.priceSummary.currency} (not a full basket total)`,
+    `Confirmed deal subtotal: ${ctx.priceSummary.confirmedPurchaseSubtotal} ${ctx.priceSummary.currency}`,
+    `Uncertain-match subtotal: ${ctx.priceSummary.uncertainPurchaseSubtotal} ${ctx.priceSummary.currency}`,
+    `Confirmed matches: ${ctx.matchSummary.confirmedMatchCount}`,
+    `Uncertain matches: ${ctx.matchSummary.lowConfidenceMatchCount}`,
+    `Items without matched deal price: ${ctx.matchSummary.unmatchedItemCount}`,
     "",
   ];
 

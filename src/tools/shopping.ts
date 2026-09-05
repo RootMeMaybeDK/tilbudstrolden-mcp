@@ -58,7 +58,7 @@ interface PlanArgs {
   preferCuisines?: Record<string, number>;
 }
 
-/** Render the day-by-day plan header, basket estimate, and one line per day */
+/** Render the day-by-day plan header, matched-deal planning estimate, and one line per day */
 function formatMealPlan(
   bestPlan: NonNullable<ReturnType<typeof findOptimalWeek>>,
   days: number,
@@ -68,16 +68,18 @@ function formatMealPlan(
   const parts: string[] = [`# ${days}-day meal plan (${householdSize} people)\n`];
 
   const basket = calculateBasketCost(bestPlan.recipes);
-  parts.push(`Estimated basket: ~${basket.totalCost} ${currency}`);
+  parts.push(
+    `Matched-deal planning estimate (not a full basket total): ~${basket.totalCost} ${currency}`,
+  );
   if (basket.sharedSavings > 0) {
-    parts.push(`Shared ingredient savings: ~${basket.sharedSavings} ${currency}`);
+    parts.push(`Shared matched-deal estimate savings: ~${basket.sharedSavings} ${currency}`);
   }
   parts.push("");
 
   for (let i = 0; i < bestPlan.recipes.length; i++) {
     const r = bestPlan.recipes[i];
     parts.push(
-      `Day ${i + 1}: ${r.name} (~${r.estimatedCost} ${currency}) [${r.proteinType}, ${r.cuisineType}, ${r.complexity}]`,
+      `Day ${i + 1}: ${r.name} (matched-deal estimate: ~${r.estimatedCost} ${currency}) [${r.proteinType}, ${r.cuisineType}, ${r.complexity}]`,
     );
   }
 
@@ -144,7 +146,7 @@ async function handlePlanAndShop(args: PlanArgs) {
 export function registerShoppingTools(server: McpServer): void {
   server.tool(
     "generate_shopping_list",
-    "Deal-optimized shopping list from specific recipes, grouped by store. USE WHEN: preparing to shop for chosen recipes ('shopping list for Bolognese and Chili'). Aggregates quantities across recipes, computes pack sizes, flags expiring deals. NOT FOR: deciding what to cook (use score_recipes or plan_and_shop first). Requires recipes to exist (see add_recipe).",
+    "Deal-optimized shopping list from specific recipes, grouped by store. USE WHEN: preparing to shop for chosen recipes ('shopping list for Bolognese and Chili'). Aggregates quantities, computes pack sizes, and reports confirmed/uncertain matched-deal purchase subtotals plus items without a matched deal price. NOT FOR: deciding what to cook (use score_recipes or plan_and_shop first). The subtotal is not a full basket total. Requires recipes to exist (see add_recipe).",
     {
       recipes: z.array(z.string()).describe("Recipe names"),
       people: z.number().optional().describe("Household size (overrides stored household config)"),
@@ -159,7 +161,7 @@ export function registerShoppingTools(server: McpServer): void {
 
   server.tool(
     "plan_and_shop",
-    "Score recipes, optimize a weekly meal plan, and generate a shopping list in one step. USE WHEN: 'plan my week', 'what should we eat?', 'make a meal plan with shopping list'. This is the main entry point for weekly dinner planning. NOT FOR: shopping for specific pre-chosen recipes (use generate_shopping_list). Returns meal plan (day-by-day with costs) followed by deal-optimized shopping list grouped by store.",
+    "Score recipes, optimize a weekly meal plan, and generate a shopping list in one step. USE WHEN: 'plan my week', 'what should we eat?', 'make a meal plan with shopping list'. This is the main entry point for weekly dinner planning. NOT FOR: shopping for specific pre-chosen recipes (use generate_shopping_list). Returns a day-by-day matched-deal planning estimate (not a full basket total), followed by a shopping list with matched-deal purchase subtotals grouped by store.",
     {
       days: z.number().optional().default(7).describe("Days to plan (default 7)"),
       people: z.number().optional().describe("Household size (overrides stored config)"),

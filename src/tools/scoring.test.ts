@@ -492,6 +492,8 @@ describe("score_recipes tool", () => {
     const description = stub.tools.get("score_recipes")?.description ?? "";
     expect(description).toContain("USE WHEN");
     expect(description).toContain("NOT FOR");
+    expect(description).toContain("matched-deal ingredient estimates");
+    expect(description).toContain("not full recipe prices");
   });
 
   it("says there is nothing to score when the library is empty", async () => {
@@ -507,9 +509,18 @@ describe("score_recipes tool", () => {
 
     const text = textOf(await callTool(stub, "score_recipes", {}));
     expect(text).toContain("# Recipe scores (1 recipes)");
-    expect(text).toContain("## Bolognese — 23 DKK (deals on 100% of ingredients)");
+    expect(text).toContain("## Bolognese");
     expect(text).toContain("medium | italian | beef | 4 servings");
-    expect(text).toContain("Deals:");
+    expect(text).toContain("Matched-deal ingredient estimate: 22.5 DKK");
+    expect(text).toContain("Confirmed deal estimate: 22.5 DKK");
+    expect(text).toContain("Uncertain-match estimate: 0 DKK");
+    expect(text).toContain("Confirmed matches: 1");
+    expect(text).toContain("Uncertain matches: 0");
+    expect(text).toContain("Items without matched deal price: 0");
+    expect(text).toContain("Confirmed deal coverage: 100%");
+    expect(text).toContain("Candidate deal coverage: 100%");
+    expect(text).toContain("Confirmed deals:");
+    expect(text).not.toContain("Estimated total");
     expect(text).toContain("Hakket oksekød (500g): Hakket oksekød 8-12% — 23 DKK @ Netto");
   });
 
@@ -531,7 +542,7 @@ describe("score_recipes tool", () => {
 
     expect(limit).toBe(8);
     expect(options?.dealerIds).toEqual(new Set(["bdf5A"]));
-    expect(text).toContain("deals on 100% of ingredients");
+    expect(text).toContain("Confirmed deal coverage: 100%");
     expect(text).toContain("@ Føtex");
   });
 
@@ -548,8 +559,9 @@ describe("score_recipes tool", () => {
 
     const text = textOf(await callTool(stub, "score_recipes", {}));
 
-    expect(text).toContain("deals on 0% of ingredients");
-    expect(text).toContain("No deals: Hakket oksekød");
+    expect(text).toContain("Confirmed deal coverage: 0%");
+    expect(text).toContain("Candidate deal coverage: 0%");
+    expect(text).toContain("Not matched: Hakket oksekød");
   });
 
   it("uses the household country's currency", async () => {
@@ -558,15 +570,17 @@ describe("score_recipes tool", () => {
     vi.mocked(api.searchDealsBatch).mockResolvedValue(new Map([["hakket oksekød", [beefOffer]]]));
 
     const text = textOf(await callTool(stub, "score_recipes", {}));
-    expect(text).toContain("EUR (deals on 100% of ingredients)");
+    expect(text).toContain("Matched-deal ingredient estimate: 22.5 EUR");
   });
 
-  it("lists unmatched ingredients under a No deals line", async () => {
+  it("counts and lists items without a matched deal price", async () => {
     vi.mocked(store.getRecipes).mockResolvedValue([beefRecipe()]);
     vi.mocked(api.searchDealsBatch).mockResolvedValue(new Map());
 
     const text = textOf(await callTool(stub, "score_recipes", {}));
-    expect(text).toContain("No deals: Hakket oksekød (500g)");
+    expect(text).toContain("Items without matched deal price: 1");
+    expect(text).toContain("Not matched: Hakket oksekød (500g)");
+    expect(text).not.toContain("0-price");
   });
 
   it("separates uncertain matches and shows the runner-up candidates", async () => {
@@ -601,8 +615,49 @@ describe("score_recipes tool", () => {
     const text = textOf(await callTool(stub, "score_recipes", {}));
     expect(text).toContain("⚠ Uncertain matches (verify these):");
     expect(text).toContain("[low confidence]");
+    expect(text).toContain("Confirmed matches: 0");
+    expect(text).toContain("Uncertain matches: 1");
+    expect(text).toContain("Confirmed deal coverage: 0%");
+    expect(text).toContain("Candidate deal coverage: 100%");
     expect(text).toContain("Other candidates:");
     expect(text).toContain("Sød mælk eller kærnemælk");
+  });
+
+  it("shows confirmed and uncertain estimates with distinct coverage", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Hakket oksekød",
+            quantity: "500g",
+            searchTerms: ["hakket oksekød"],
+            category: "meat",
+          },
+          {
+            name: "Mælk",
+            quantity: "5 dl",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hakket oksekød", [beefOffer]],
+        ["mælk", [makeOffer({ id: "milk", heading: "Øko mælk eller fløde", price: 12 })]],
+      ]),
+    );
+
+    const text = textOf(await callTool(stub, "score_recipes", {}));
+
+    expect(text).toContain("Matched-deal ingredient estimate: 25.5 DKK");
+    expect(text).toContain("Confirmed deal estimate: 22.5 DKK");
+    expect(text).toContain("Uncertain-match estimate: 3 DKK");
+    expect(text).toContain("Confirmed matches: 1");
+    expect(text).toContain("Uncertain matches: 1");
+    expect(text).toContain("Confirmed deal coverage: 50%");
+    expect(text).toContain("Candidate deal coverage: 100%");
   });
 
   it("omits the plan section unless optimize is set", async () => {
@@ -623,8 +678,9 @@ describe("score_recipes tool", () => {
 
     const text = textOf(await callTool(stub, "score_recipes", { optimize: true, days: 2 }));
     expect(text).toContain("# Optimized 2-day plan");
-    expect(text).toContain("Total basket: ~");
-    expect(text).toContain("Unique items to buy:");
+    expect(text).toContain("Matched-deal planning estimate (not a full basket total): ~");
+    expect(text).toContain("Unique matched-deal items in planning estimate:");
+    expect(text).not.toContain("Total basket:");
     expect(text).toContain("Day 1:");
     expect(text).toContain("Day 2:");
   });

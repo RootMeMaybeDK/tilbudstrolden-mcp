@@ -170,15 +170,29 @@ export async function scoreAllRecipes(
 }
 
 function formatRecipeHeader(r: ScoredRecipe, currency: string): string[] {
+  const summaryItems = r.ingredients.map((ingredient) => ({
+    confidence: ingredient.confidence,
+    amount: ingredient.estimatedCost,
+  }));
+  const matchSummary = r.matchSummary ?? summarizeDealMatches(summaryItems);
+  const priceSummary = r.priceSummary ?? summarizeRecipePrices(summaryItems, currency);
   return [
-    `## ${r.name} — ${Math.round(r.estimatedCost)} ${currency} (deals on ${r.dealCoverage}% of ingredients)`,
+    `## ${r.name}`,
     `   ${r.complexity} | ${r.cuisineType} | ${r.proteinType} | ${r.servings} servings`,
+    `   Matched-deal ingredient estimate: ${priceSummary.matchedDealEstimate} ${currency} (not a full recipe price)`,
+    `   Confirmed deal estimate: ${priceSummary.confirmedDealEstimate} ${currency}`,
+    `   Uncertain-match estimate: ${priceSummary.uncertainDealEstimate} ${currency}`,
+    `   Confirmed matches: ${matchSummary.confirmedMatchCount}`,
+    `   Uncertain matches: ${matchSummary.lowConfidenceMatchCount}`,
+    `   Items without matched deal price: ${matchSummary.unmatchedItemCount}`,
+    `   Confirmed deal coverage: ${matchSummary.confirmedCoveragePercent}%`,
+    `   Candidate deal coverage: ${matchSummary.candidateCoveragePercent}%`,
   ];
 }
 
 function formatHighConfDeals(ingredients: ScoredIngredient[], currency: string): string[] {
   if (ingredients.length === 0) return [];
-  const lines = [`   Deals:`];
+  const lines = [`   Confirmed deals:`];
   for (const i of ingredients) {
     const deal = i.bestDeal;
     if (!deal) continue;
@@ -220,7 +234,7 @@ function formatLowConfDeals(ingredients: ScoredIngredient[], currency: string): 
 
 function formatNoDealItems(ingredients: ScoredIngredient[]): string[] {
   if (ingredients.length === 0) return [];
-  return [`   No deals: ${ingredients.map((i) => `${i.name} (${i.quantity})`).join(", ")}`];
+  return [`   Not matched: ${ingredients.map((i) => `${i.name} (${i.quantity})`).join(", ")}`];
 }
 
 function formatRecipeScore(r: ScoredRecipe, currency = "DKK"): string[] {
@@ -285,15 +299,17 @@ function formatOptimizedPlan(
   }
 
   const basket = calculateBasketCost(bestPlan.recipes);
-  const lines = [`Total basket: ~${basket.totalCost} ${cur} for ${days} days`];
+  const lines = [
+    `Matched-deal planning estimate (not a full basket total): ~${basket.totalCost} ${cur} for ${days} days`,
+  ];
   if (basket.sharedSavings > 0) {
-    lines.push(`Shared ingredient savings: ~${basket.sharedSavings} ${cur}`);
+    lines.push(`Shared matched-deal estimate savings: ~${basket.sharedSavings} ${cur}`);
   }
-  lines.push(`Unique items to buy: ${basket.uniqueIngredients}\n`);
+  lines.push(`Unique matched-deal items in planning estimate: ${basket.uniqueIngredients}\n`);
   for (let i = 0; i < bestPlan.recipes.length; i++) {
     const r = bestPlan.recipes[i];
     lines.push(
-      `Day ${i + 1}: ${r.name} (~${r.estimatedCost} ${cur}) [${r.proteinType}, ${r.cuisineType}, ${r.complexity}]`,
+      `Day ${i + 1}: ${r.name} (matched-deal estimate: ~${r.estimatedCost} ${cur}) [${r.proteinType}, ${r.cuisineType}, ${r.complexity}]`,
     );
   }
   return lines;
@@ -329,7 +345,7 @@ async function handleScoreRecipes(args: ScoreRecipesArgs) {
 export function registerScoringTools(server: McpServer): void {
   server.tool(
     "score_recipes",
-    "Score all saved recipes against current deals, optionally optimize a weekly meal plan. USE WHEN: deciding what to cook based on current deals ('what's cheapest this week'), comparing recipe costs. NOT FOR: generating a shopping list (use generate_shopping_list or plan_and_shop). Shows deal coverage %, estimated cost, and confidence levels per ingredient.",
+    "Score all saved recipes against current deals, optionally optimize a weekly meal plan. USE WHEN: deciding what to cook based on current deals, comparing matched-deal ingredient estimates. NOT FOR: generating a shopping list (use generate_shopping_list or plan_and_shop). Shows confirmed and uncertain matches, items without a matched deal price, and confirmed/candidate deal coverage. Estimates are not full recipe prices.",
     {
       optimize: z.boolean().optional().default(false).describe("Also generate optimal weekly plan"),
       days: z.number().optional().default(7).describe("Days to plan (default 7)"),

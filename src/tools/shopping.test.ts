@@ -110,6 +110,7 @@ describe("registerShoppingTools", () => {
     for (const tool of stub.tools.values()) {
       expect(tool.description, `${tool.name} description`).toContain("USE WHEN");
       expect(tool.description, `${tool.name} description`).toContain("NOT FOR");
+      expect(tool.description, `${tool.name} description`).toContain("not a full basket total");
     }
   });
 });
@@ -148,7 +149,13 @@ describe("generate_shopping_list", () => {
       }),
     );
     expect(text).toContain("Shopping list for: Bolognese (2 people)");
-    expect(text).toContain("Estimated register total (deals only): ~45 kr");
+    expect(text).toContain("Matched-deal purchase subtotal: 45 DKK (not a full basket total)");
+    expect(text).toContain("Confirmed deal subtotal: 45 DKK");
+    expect(text).toContain("Uncertain-match subtotal: 0 DKK");
+    expect(text).toContain("Confirmed matches: 1");
+    expect(text).toContain("Uncertain matches: 0");
+    expect(text).toContain("Items without matched deal price: 0");
+    expect(text).not.toContain("Estimated register total");
     expect(text).toContain("## Netto (1 items)");
     // 500 g recipe quantity scaled from 4 servings to 2 people = 250 g needed,
     // bought as one 500 g pack at 45 kr, leaving 250 g over.
@@ -367,7 +374,8 @@ describe("generate_shopping_list", () => {
     );
     expect(text).toContain("## Buy at regular price (1 items)");
     expect(text).toContain("- Enhjørning (0.5 stk) [Bolognese]");
-    expect(text).toContain("Estimated register total (deals only): ~0 kr");
+    expect(text).toContain("Matched-deal purchase subtotal: 0 DKK");
+    expect(text).toContain("Items without matched deal price: 1");
 
     const result = await buildShoppingListResult(recipes, 2);
     expect(result.matchSummary).toEqual({
@@ -592,6 +600,66 @@ describe("generate_shopping_list", () => {
     expect(result.grandTotal).toBe(12);
     expect(result.text).toContain("= 12 kr");
     expect(result.text).toContain("⚠");
+    expect(result.text).toContain("Uncertain matches: 1");
+  });
+
+  it("reports high, low, and unmatched shopping items separately", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Hakket oksekød",
+            quantity: "500g",
+            searchTerms: ["hakket oksekød"],
+            category: "meat",
+          },
+          {
+            name: "Mælk",
+            quantity: "5 dl",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+          {
+            name: "Enhjørning",
+            quantity: "1 stk",
+            searchTerms: ["enhjørning"],
+            category: "other",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        ["hakket oksekød", [makeOffer()]],
+        [
+          "mælk",
+          [
+            makeOffer({
+              id: "milk",
+              heading: "Øko mælk eller fløde",
+              price: 12,
+              quantity: 1,
+              unit: "l",
+            }),
+          ],
+        ],
+      ]),
+    );
+
+    const text = textOf(
+      await callTool(stub, "generate_shopping_list", {
+        recipes: ["Bolognese"],
+      }),
+    );
+
+    expect(text).toContain("Matched-deal purchase subtotal: 57 DKK");
+    expect(text).toContain("Confirmed deal subtotal: 45 DKK");
+    expect(text).toContain("Uncertain-match subtotal: 12 DKK");
+    expect(text).toContain("Confirmed matches: 1");
+    expect(text).toContain("Uncertain matches: 1");
+    expect(text).toContain("Items without matched deal price: 1");
+    expect(text).toContain("## Buy at regular price (1 items)");
+    expect(text).not.toContain("Estimated register total");
   });
 
   it("keeps ordered half-cent sticker fallbacks aligned with legacy grandTotal", async () => {
@@ -686,7 +754,7 @@ describe("generate_shopping_list", () => {
       "Hvidløg (2 fed): Hvidløg - 8 DKK (90.00 kr/kg) @ Netto until 2026-06-30",
     );
     expect(text).not.toContain("/pack");
-    expect(text).toContain("Estimated register total (deals only): ~8 kr");
+    expect(text).toContain("Matched-deal purchase subtotal: 8 DKK");
   });
 
   it("omits the unit price from the fallback line when the offer has none", async () => {
@@ -791,7 +859,8 @@ describe("plan_and_shop", () => {
 
     const text = textOf(await callTool(stub, "plan_and_shop", { days: 3 }));
     expect(text).toContain("# 3-day meal plan (2 people)");
-    expect(text).toContain("Estimated basket: ~");
+    expect(text).toContain("Matched-deal planning estimate (not a full basket total): ~");
+    expect(text).not.toContain("Estimated basket:");
     expect(text).toContain("Day 1:");
     expect(text).toContain("Day 3:");
     expect(text).not.toContain("Day 4:");
@@ -799,6 +868,7 @@ describe("plan_and_shop", () => {
     const divider = text.indexOf("\n---\n");
     expect(divider).toBeGreaterThan(-1);
     expect(text.slice(divider)).toContain("Shopping list for:");
+    expect(text.slice(divider)).toContain("Matched-deal purchase subtotal:");
     expect(text.slice(divider)).toContain("## Netto");
   });
 
