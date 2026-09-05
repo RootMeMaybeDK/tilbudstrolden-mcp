@@ -1,5 +1,6 @@
 // Unified JSON data store for household, recipes, pantry, history, and spend tracking
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -173,22 +174,60 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 
 async function loadRaw(): Promise<DataStore> {
   const filePath = getStorePath();
+  let data: string;
   try {
-    const data = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(data);
-    return DataStoreSchema.parse(parsed) as DataStore;
+    data = await fs.readFile(filePath, "utf-8");
   } catch (err) {
-    // If file doesn't exist, return empty. If validation fails, log and return empty.
-    if (err instanceof z.ZodError) {
-      console.error("Data file validation failed, starting fresh:", err.issues);
-    }
-    return emptyStore();
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return emptyStore();
+    throw err;
+  }
+
+  const parsed = JSON.parse(data);
+  return DataStoreSchema.parse(parsed) as DataStore;
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform !== "linux") return;
+  const handle = await fs.open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
 async function saveRaw(data: DataStore): Promise<void> {
   const filePath = getStorePath();
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+  const directory = path.dirname(filePath);
+  const basename = path.basename(filePath);
+  const tempPath = path.join(directory, `.${basename}.${process.pid}.${randomUUID()}.tmp`);
+  const validated = DataStoreSchema.parse(data) as DataStore;
+  const serialized = JSON.stringify(validated, null, 2);
+
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let renamed = false;
+  try {
+    handle = await fs.open(tempPath, "wx", 0o600);
+    await handle.writeFile(serialized, "utf-8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+
+    await fs.rename(tempPath, filePath);
+    renamed = true;
+    // Rename is the commit point. A later directory-sync failure only makes
+    // crash durability uncertain; it must not report the committed write as failed.
+    await syncDirectory(directory).catch(() => undefined);
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => undefined);
+    }
+    if (!renamed) {
+      await fs.unlink(tempPath).catch(() => undefined);
+    }
+  }
 }
 
 export async function load(): Promise<DataStore> {
