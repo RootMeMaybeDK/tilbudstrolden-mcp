@@ -1,11 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { calculateBasketCost, findOptimalWeek } from "../scoring.js";
-import { scoreRecipes } from "../services/scoring-service.js";
+import { planAndShop, type SuccessfulPlanAndShopResult } from "../services/planning-service.js";
 import { generateShoppingList } from "../services/shopping-service.js";
-import * as store from "../store.js";
 import { errorResult } from "./shared.js";
-import { buildShoppingList, formatShoppingList } from "./shopping-list.js";
+import { formatShoppingList } from "./shopping-list.js";
 
 interface ShoppingListArgs {
   recipes: string[];
@@ -54,27 +52,23 @@ interface PlanArgs {
 }
 
 /** Render the day-by-day plan header, matched-deal planning estimate, and one line per day */
-function formatMealPlan(
-  bestPlan: NonNullable<ReturnType<typeof findOptimalWeek>>,
-  days: number,
-  householdSize: number,
-  currency: string,
-): string[] {
-  const parts: string[] = [`# ${days}-day meal plan (${householdSize} people)\n`];
+function formatMealPlan(result: SuccessfulPlanAndShopResult): string[] {
+  const parts: string[] = [`# ${result.days}-day meal plan (${result.householdSize} people)\n`];
 
-  const basket = calculateBasketCost(bestPlan.recipes);
   parts.push(
-    `Matched-deal planning estimate (not a full basket total): ~${basket.totalCost} ${currency}`,
+    `Matched-deal planning estimate (not a full basket total): ~${result.planningEstimate.matchedDealPlanningEstimate} ${result.currency}`,
   );
-  if (basket.sharedSavings > 0) {
-    parts.push(`Shared matched-deal estimate savings: ~${basket.sharedSavings} ${currency}`);
+  if (result.planningEstimate.sharedMatchedDealEstimateSavings > 0) {
+    parts.push(
+      `Shared matched-deal estimate savings: ~${result.planningEstimate.sharedMatchedDealEstimateSavings} ${result.currency}`,
+    );
   }
   parts.push("");
 
-  for (let i = 0; i < bestPlan.recipes.length; i++) {
-    const r = bestPlan.recipes[i];
+  for (const day of result.plan) {
+    const recipe = day.recipe;
     parts.push(
-      `Day ${i + 1}: ${r.name} (matched-deal estimate: ~${r.estimatedCost} ${currency}) [${r.proteinType}, ${r.cuisineType}, ${r.complexity}]`,
+      `Day ${day.day}: ${day.recipeName} (matched-deal estimate: ~${day.matchedDealEstimate} ${result.currency}) [${recipe.proteinType}, ${recipe.cuisineType}, ${recipe.complexity}]`,
     );
   }
 
@@ -83,41 +77,24 @@ function formatMealPlan(
 
 async function handlePlanAndShop(args: PlanArgs) {
   try {
-    const { days, people } = args;
-    const { scored, dealMap: cachedDeals, householdSize, locale } = await scoreRecipes({ people });
+    const result = await planAndShop(args);
 
-    if (scored.length < days) {
+    if (result.status === "insufficient-recipes") {
       return errorResult(
-        `Need at least ${days} recipes to plan ${days} days, but only ${scored.length} recipes exist. Add more with add_recipe.`,
+        `Need at least ${result.days} recipes to plan ${result.days} days, but only ${result.availableRecipeCount} recipes exist. Add more with add_recipe.`,
       );
     }
 
-    const bestPlan = findOptimalWeek(scored, days, {
-      maxPerProtein: args.maxPerProtein,
-      maxPerCuisine: args.maxPerCuisine,
-      maxSlowDays: args.maxSlowDays,
-      excludeProteins: args.excludeProteins,
-      slowOnlyOnDays: args.slowOnlyOnDays,
-      preferCuisines: args.preferCuisines,
-      ingredientTags: locale.ingredientTags,
-    });
-
-    if (!bestPlan) {
+    if (result.status === "no-valid-plan") {
       return errorResult(
         "Could not find a valid meal plan with the variety constraints. Try relaxing maxPerProtein, maxPerCuisine, or maxSlowDays.",
       );
     }
 
-    const parts = formatMealPlan(bestPlan, days, householdSize, locale.currency);
-
-    // Generate shopping list for the planned recipes
-    const allRecipes = await store.getRecipes();
-    const plannedRecipes = allRecipes.filter((r) =>
-      bestPlan.recipes.some((p) => p.name.toLowerCase() === r.name.toLowerCase()),
-    );
+    const parts = formatMealPlan(result);
 
     parts.push("\n---\n");
-    parts.push(await buildShoppingList(plannedRecipes, householdSize, cachedDeals));
+    parts.push(formatShoppingList(result.shopping));
 
     return {
       content: [{ type: "text" as const, text: parts.join("\n") }],
