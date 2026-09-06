@@ -1,144 +1,22 @@
 import type { Offer } from "../api.js";
-import { internalDealCandidateLimit, searchDealsBatch } from "../api.js";
-import { getLocale } from "../locales.js";
+import { formatExpiryStatus } from "../deal-expiry.js";
+import type { DealMatchSummary, ShoppingPriceSummary } from "../scoring.js";
+import { formatQuantity } from "../scoring.js";
 import {
-  aggregateQuantities,
-  computeShoppingCost,
-  computeShoppingCostFromTotal,
-  type DealMatchConfidence,
-  type DealMatchSummary,
-  type DealSummaryItem,
-  expandSearchTerms,
-  findBestDeal,
-  formatQuantity,
-  type PreferredStores,
-  parseQuantity,
-  preferredDealerIds,
-  type ShoppingPriceSummary,
-  summarizeDealMatches,
-  summarizeShoppingPrices,
-} from "../scoring.js";
-import * as store from "../store.js";
-import { daysUntilExpiry, expiryTag } from "./shared.js";
+  buildShoppingListForRecipes,
+  type ExpiringDealWarning,
+  type StructuredShoppingItem,
+  type StructuredShoppingList,
+  type UncertainMatchWarning,
+} from "../services/shopping-service.js";
+import type { Recipe } from "../store.js";
 
-/** Ingredient data aggregated across multiple recipes */
-interface AggregatedIngredient {
-  name: string;
-  searchTerms: string[];
-  category: string;
-  contributions: Array<{
-    quantity: string;
-    recipeServings: number;
-    recipeName: string;
-  }>;
-  fromRecipes: string[];
-}
-
-/** Collect and aggregate ingredients across recipes, skipping pantry items */
-function mergeIntoExisting(
-  existing: AggregatedIngredient,
-  recipe: store.Recipe,
-  ing: store.Ingredient,
-): void {
-  existing.fromRecipes.push(recipe.name);
-  existing.contributions.push({
-    quantity: ing.quantity,
-    recipeServings: recipe.servings,
-    recipeName: recipe.name,
-  });
-  for (const t of ing.searchTerms) {
-    if (!existing.searchTerms.includes(t)) existing.searchTerms.push(t);
-  }
-}
-
-function makeAggregated(recipe: store.Recipe, ing: store.Ingredient): AggregatedIngredient {
-  return {
-    name: ing.name,
-    searchTerms: [...ing.searchTerms],
-    category: ing.category,
-    contributions: [
-      {
-        quantity: ing.quantity,
-        recipeServings: recipe.servings,
-        recipeName: recipe.name,
-      },
-    ],
-    fromRecipes: [recipe.name],
-  };
-}
-
-function collectIngredients(
-  selectedRecipes: store.Recipe[],
-  pantrySet: Set<string>,
-): Map<string, AggregatedIngredient> {
-  const allIngredients = new Map<string, AggregatedIngredient>();
-  for (const recipe of selectedRecipes) {
-    for (const ing of recipe.ingredients) {
-      const key = ing.name.toLowerCase();
-      if (pantrySet.has(key)) continue;
-      const existing = allIngredients.get(key);
-      if (existing) {
-        mergeIntoExisting(existing, recipe, ing);
-      } else {
-        allIngredients.set(key, makeAggregated(recipe, ing));
-      }
-    }
-  }
-  return allIngredients;
-}
-
-/** Build human-readable display quantity, aggregating across recipes */
-function buildDisplayQuantity(
-  ing: AggregatedIngredient,
-  householdSize: number,
-): { displayQty: string; aggregated: ReturnType<typeof aggregateQuantities> } {
-  const aggregated = aggregateQuantities(ing.contributions, householdSize);
-
-  const scaledContributions = ing.contributions.map((c) => {
-    const parsed = parseQuantity(c.quantity);
-    if (!parsed) return c.quantity;
-    const scale = c.recipeServings > 0 ? householdSize / c.recipeServings : 1;
-    return formatQuantity(parsed.amount * scale, parsed.unit);
-  });
-
-  let displayQty: string;
-  if (ing.contributions.length > 1 && aggregated) {
-    displayQty = `${scaledContributions.join(" + ")} = ${formatQuantity(aggregated.totalAmount, aggregated.unit)}`;
-  } else if (aggregated) {
-    displayQty = formatQuantity(aggregated.totalAmount, aggregated.unit);
-  } else {
-    displayQty = scaledContributions.join(" + ");
-  }
-
-  return { displayQty, aggregated };
-}
-
-/** Format a single ingredient's deal match into a shopping list line */
-function formatIngredientDeal(
-  ing: AggregatedIngredient,
-  best: Offer,
-  confidence: "high" | "low",
-  displayQty: string,
-  aggregated: ReturnType<typeof aggregateQuantities>,
-  householdSize: number,
-  currencySymbol: string,
-): { line: string; cost: number } {
-  const storeName = best.store;
-  const validTo = best.validUntil?.slice(0, 10) ?? "unknown";
-  const conf = confidence === "low" ? " ⚠" : "";
-  const expiry = expiryTag(best.validUntil);
-
-  let shopping = aggregated
-    ? computeShoppingCostFromTotal(best, aggregated.totalAmount, aggregated.unit)
-    : null;
-  if (!shopping && ing.contributions.length === 1) {
-    shopping = computeShoppingCost(
-      best,
-      ing.contributions[0].quantity,
-      ing.contributions[0].recipeServings,
-      householdSize,
-    );
-  }
+function formatMatchedItem(item: StructuredShoppingItem, currencySymbol: string): string {
+  const offer = item.selectedOffer as Offer;
+  const validTo = offer.validUntil?.slice(0, 10) ?? "unknown";
+  const confidence = item.confidence === "low" ? " ⚠" : "";
+  const expiry = item.expiryStatus ? formatExpiryStatus(item.expiryStatus) : "";
+  const shopping = item.purchase;
 
   if (shopping) {
     const packInfo =
@@ -149,228 +27,29 @@ function formatIngredientDeal(
       shopping.leftover > 0
         ? ` (${formatQuantity(shopping.leftover, shopping.unitNeeded)} leftover)`
         : "";
-    return {
-      line: `${ing.name}: need ${displayQty} -> ${packInfo} = ${shopping.totalCost} ${currencySymbol} [${formatQuantity(shopping.packSize, shopping.unitNeeded)}/pack${shopping.unitPrice ? `, ${shopping.unitPrice}` : ""}]${leftoverInfo} -- ${best.heading} @ ${storeName} until ${validTo}${expiry}${conf}`,
-      cost: shopping.totalCost,
-    };
+    return `${item.ingredientName}: need ${item.quantity.displayQuantity} -> ${packInfo} = ${shopping.totalCost} ${currencySymbol} [${formatQuantity(shopping.packSize, shopping.unitNeeded)}/pack${shopping.unitPrice ? `, ${shopping.unitPrice}` : ""}]${leftoverInfo} -- ${offer.heading} @ ${offer.store} until ${validTo}${expiry}${confidence}`;
   }
 
-  return {
-    line: `${ing.name} (${displayQty}): ${best.heading} - ${best.price} ${best.currency}${best.pricePerUnit ? ` (${best.pricePerUnit})` : ""} @ ${storeName} until ${validTo}${expiry}${conf}`,
-    cost: best.price ?? 0,
-  };
+  return `${item.ingredientName} (${item.quantity.displayQuantity}): ${offer.heading} - ${offer.price} ${offer.currency}${offer.pricePerUnit ? ` (${offer.pricePerUnit})` : ""} @ ${offer.store} until ${validTo}${expiry}${confidence}`;
 }
 
-async function resolveDealMap(
-  existingDealMap: Map<string, Offer[]> | undefined,
-  ingredients: ReturnType<typeof collectIngredients>,
-  locale: ReturnType<typeof getLocale>,
-  preferredStores: PreferredStores,
-): Promise<Map<string, Offer[]>> {
-  if (existingDealMap) return existingDealMap;
-  const allSearchTerms = new Set<string>();
-  for (const [, ing] of ingredients) {
-    for (const term of expandSearchTerms(ing.searchTerms, locale.synonymMap))
-      allSearchTerms.add(term);
-  }
-  const dealerIds = preferredDealerIds(preferredStores);
-  return searchDealsBatch(
-    [...allSearchTerms],
-    internalDealCandidateLimit(dealerIds),
-    locale.country,
-    {
-      dealerIds,
-    },
-  );
+function formatUnmatchedItem(item: StructuredShoppingItem): string {
+  return `${item.ingredientName} (${item.quantity.displayQuantity}) [${item.fromRecipes.join(", ")}]`;
 }
 
-interface IngredientShoppingResult {
-  storeName?: string;
-  storeLine?: string;
-  regular?: string;
-  uncertain?: string;
-  expiring?: string;
-  cost: number;
-  confidence: DealMatchConfidence;
-}
-
-function uncertainAlternativesLine(
-  ing: AggregatedIngredient,
-  best: Offer,
-  candidates: { offer: Offer; score: number }[],
-): string {
-  const alts = candidates
-    .slice(1)
-    .map((c) => `${c.offer.heading} - ${c.offer.price} ${c.offer.currency} @ ${c.offer.store}`)
+function formatUncertainWarning(warning: UncertainMatchWarning): string {
+  const alternatives = warning.alternatives
+    .map(
+      (candidate) =>
+        `${candidate.offer.heading} - ${candidate.offer.price} ${candidate.offer.currency} @ ${candidate.offer.store}`,
+    )
     .join("; ");
-  return `${ing.name}: picked "${best.heading}" but also found: ${alts}`;
+  return `${warning.ingredientName}: picked "${warning.selectedOffer.heading}" but also found: ${alternatives}`;
 }
 
-/** Everything a single ingredient needs to be matched against deals and priced */
-interface ShoppingContext {
-  dealMap: Map<string, Offer[]>;
-  preferredStores: PreferredStores;
-  locale: ReturnType<typeof getLocale>;
-  householdSize: number;
-}
-
-function processIngredientForList(
-  ing: AggregatedIngredient,
-  ctx: ShoppingContext,
-): IngredientShoppingResult {
-  const { dealMap, preferredStores, locale, householdSize } = ctx;
-  const result = findBestDeal(ing, dealMap, preferredStores, locale);
-  const { displayQty, aggregated } = buildDisplayQuantity(ing, householdSize);
-
-  if (!result.best) {
-    return {
-      regular: `${ing.name} (${displayQty}) [${ing.fromRecipes.join(", ")}]`,
-      cost: 0,
-      confidence: "none",
-    };
-  }
-
-  const best = result.best;
-  const { line, cost } = formatIngredientDeal(
-    ing,
-    best,
-    result.confidence as "high" | "low",
-    displayQty,
-    aggregated,
-    householdSize,
-    locale.currencySymbol,
-  );
-
-  const out: IngredientShoppingResult = {
-    storeName: best.store,
-    storeLine: line,
-    cost,
-    confidence: result.confidence,
-  };
-
-  if (daysUntilExpiry(best.validUntil) <= 2) {
-    const validTo = best.validUntil?.slice(0, 10) ?? "unknown";
-    out.expiring = `${ing.name}: deal at ${best.store} ${expiryTag(best.validUntil).trim().toLowerCase()} (${validTo})`;
-  }
-
-  if (result.confidence === "low" && result.candidates.length > 1) {
-    out.uncertain = uncertainAlternativesLine(ing, best, result.candidates);
-  }
-
-  return out;
-}
-
-/** Build the shopping list output shared by generate_shopping_list and plan_and_shop */
-export interface ShoppingListResult {
-  text: string;
-  matchSummary: DealMatchSummary;
-  priceSummary: ShoppingPriceSummary;
-  /** Legacy matched-deal purchase subtotal retained for existing callers. */
-  grandTotal: number;
-}
-
-export async function buildShoppingListResult(
-  selectedRecipes: store.Recipe[],
-  householdSize: number,
-  existingDealMap?: Map<string, Offer[]>,
-  excludePantry = true,
-): Promise<ShoppingListResult> {
-  const pantry = excludePantry ? await store.getPantry() : [];
-  const pantrySet = new Set(pantry.map((p) => p.toLowerCase()));
-  const household = await store.getHousehold();
-  const locale = getLocale(household.country);
-  const preferredStores = household.stores;
-
-  const allIngredients = collectIngredients(selectedRecipes, pantrySet);
-  if (allIngredients.size === 0) {
-    const summaryItems: DealSummaryItem[] = [];
-    return {
-      text: "All ingredients are in your pantry. Nothing to buy!",
-      matchSummary: summarizeDealMatches(summaryItems),
-      priceSummary: summarizeShoppingPrices(summaryItems, locale.currency),
-      grandTotal: 0,
-    };
-  }
-
-  const dealMap = await resolveDealMap(existingDealMap, allIngredients, locale, preferredStores);
-
-  const tally = tallyIngredients(allIngredients, {
-    dealMap,
-    preferredStores,
-    locale,
-    householdSize,
-  });
-
-  const summaryItems = tally.results.map((result) => ({
-    confidence: result.confidence,
-    amount: result.cost,
-  }));
-  const matchSummary = summarizeDealMatches(summaryItems);
-  const priceSummary = summarizeShoppingPrices(summaryItems, locale.currency);
-  const text = formatShoppingOutput({
-    ...tally,
-    matchSummary,
-    priceSummary,
-    selectedRecipes,
-    householdSize,
-    pantry,
-    currencySymbol: locale.currencySymbol,
-  });
-
-  return { text, matchSummary, priceSummary, grandTotal: tally.grandTotal };
-}
-
-/** Preserve the existing text-only shopping-list contract for MCP callers. */
-export async function buildShoppingList(
-  selectedRecipes: store.Recipe[],
-  householdSize: number,
-  existingDealMap?: Map<string, Offer[]>,
-  excludePantry = true,
-): Promise<string> {
-  return (
-    await buildShoppingListResult(selectedRecipes, householdSize, existingDealMap, excludePantry)
-  ).text;
-}
-
-/** Running totals collected while matching each ingredient against the deal map */
-interface ShoppingTally {
-  byStore: Map<string, string[]>;
-  regularPrice: string[];
-  uncertainItems: string[];
-  expiringWarnings: string[];
-  grandTotal: number;
-  results: IngredientShoppingResult[];
-}
-
-function addToTally(tally: ShoppingTally, r: IngredientShoppingResult): void {
-  tally.results.push(r);
-  tally.grandTotal += r.cost;
-  if (r.expiring) tally.expiringWarnings.push(r.expiring);
-  if (r.uncertain) tally.uncertainItems.push(r.uncertain);
-  if (r.regular) tally.regularPrice.push(r.regular);
-  if (r.storeName && r.storeLine) {
-    const storeList = tally.byStore.get(r.storeName) ?? [];
-    storeList.push(r.storeLine);
-    tally.byStore.set(r.storeName, storeList);
-  }
-}
-
-function tallyIngredients(
-  allIngredients: Map<string, AggregatedIngredient>,
-  ctx: ShoppingContext,
-): ShoppingTally {
-  const tally: ShoppingTally = {
-    byStore: new Map(),
-    regularPrice: [],
-    uncertainItems: [],
-    expiringWarnings: [],
-    grandTotal: 0,
-    results: [],
-  };
-  for (const [, ing] of allIngredients) {
-    addToTally(tally, processIngredientForList(ing, ctx));
-  }
-  return tally;
+function formatExpiringWarning(warning: ExpiringDealWarning): string {
+  const validTo = warning.offer.validUntil?.slice(0, 10) ?? "unknown";
+  return `${warning.ingredientName}: deal at ${warning.offer.store} ${formatExpiryStatus(warning.expiryStatus).trim().toLowerCase()} (${validTo})`;
 }
 
 function bulletSection(header: string, items: string[]): string[] {
@@ -381,64 +60,101 @@ function bulletSection(header: string, items: string[]): string[] {
   return lines;
 }
 
-function storeSection(storeName: string, items: string[]): string[] {
+function storeSection(
+  storeName: string,
+  items: StructuredShoppingItem[],
+  currencySymbol: string,
+): string[] {
   const lines = [`## ${storeName} (${items.length} items)`];
-  for (let i = 0; i < items.length; i++) {
-    lines.push(`${i + 1}. ${items[i]}`);
+  for (let index = 0; index < items.length; index++) {
+    lines.push(`${index + 1}. ${formatMatchedItem(items[index], currencySymbol)}`);
   }
   lines.push("");
   return lines;
 }
 
-function findSkippedPantry(pantry: string[], recipes: store.Recipe[]): string[] {
-  return pantry.filter((p) =>
-    recipes.some((r) => r.ingredients.some((i) => i.name.toLowerCase() === p.toLowerCase())),
-  );
-}
+/** Format structured shopping data using the existing MCP text contract. */
+export function formatShoppingList(result: StructuredShoppingList): string {
+  if (result.status === "nothing-to-buy") {
+    return "All ingredients are in your pantry. Nothing to buy!";
+  }
 
-/** Format the final shopping list text from categorized data */
-function formatShoppingOutput(ctx: {
-  selectedRecipes: store.Recipe[];
-  householdSize: number;
-  grandTotal: number;
-  byStore: Map<string, string[]>;
-  regularPrice: string[];
-  uncertainItems: string[];
-  expiringWarnings: string[];
-  pantry: string[];
-  currencySymbol: string;
-  matchSummary: DealMatchSummary;
-  priceSummary: ShoppingPriceSummary;
-}): string {
   const parts: string[] = [
-    `Shopping list for: ${ctx.selectedRecipes.map((r) => r.name).join(", ")} (${ctx.householdSize} people)`,
-    `Matched-deal purchase subtotal: ${ctx.priceSummary.matchedPurchaseSubtotal} ${ctx.priceSummary.currency} (not a full basket total)`,
-    `Confirmed deal subtotal: ${ctx.priceSummary.confirmedPurchaseSubtotal} ${ctx.priceSummary.currency}`,
-    `Uncertain-match subtotal: ${ctx.priceSummary.uncertainPurchaseSubtotal} ${ctx.priceSummary.currency}`,
-    `Confirmed matches: ${ctx.matchSummary.confirmedMatchCount}`,
-    `Uncertain matches: ${ctx.matchSummary.lowConfidenceMatchCount}`,
-    `Items without matched deal price: ${ctx.matchSummary.unmatchedItemCount}`,
+    `Shopping list for: ${result.selectedRecipes.map((recipe) => recipe.name).join(", ")} (${result.householdSize} people)`,
+    `Matched-deal purchase subtotal: ${result.priceSummary.matchedPurchaseSubtotal} ${result.priceSummary.currency} (not a full basket total)`,
+    `Confirmed deal subtotal: ${result.priceSummary.confirmedPurchaseSubtotal} ${result.priceSummary.currency}`,
+    `Uncertain-match subtotal: ${result.priceSummary.uncertainPurchaseSubtotal} ${result.priceSummary.currency}`,
+    `Confirmed matches: ${result.matchSummary.confirmedMatchCount}`,
+    `Uncertain matches: ${result.matchSummary.lowConfidenceMatchCount}`,
+    `Items without matched deal price: ${result.matchSummary.unmatchedItemCount}`,
     "",
   ];
 
-  parts.push(...bulletSection(`## ⏰ Buy first (expiring soon)`, ctx.expiringWarnings));
+  const expiringWarnings = result.warnings
+    .filter((warning): warning is ExpiringDealWarning => warning.type === "expiring-deal")
+    .map(formatExpiringWarning);
+  parts.push(...bulletSection("## ⏰ Buy first (expiring soon)", expiringWarnings));
 
-  for (const [storeName, items] of ctx.byStore) {
-    parts.push(...storeSection(storeName, items));
+  for (const group of result.storeGroups) {
+    parts.push(...storeSection(group.storeName, group.items, result.locale.currencySymbol));
   }
 
   parts.push(
     ...bulletSection(
-      `## Buy at regular price (${ctx.regularPrice.length} items)`,
-      ctx.regularPrice,
+      `## Buy at regular price (${result.unmatchedItems.length} items)`,
+      result.unmatchedItems.map(formatUnmatchedItem),
     ),
   );
-  parts.push(...bulletSection(`## ⚠ Uncertain matches (verify these)`, ctx.uncertainItems));
 
-  const skippedPantry = findSkippedPantry(ctx.pantry, ctx.selectedRecipes);
-  if (skippedPantry.length > 0) {
-    parts.push(`## Skipped (in pantry): ${skippedPantry.join(", ")}`);
+  const uncertainWarnings = result.warnings
+    .filter((warning): warning is UncertainMatchWarning => warning.type === "uncertain-match")
+    .map(formatUncertainWarning);
+  parts.push(...bulletSection("## ⚠ Uncertain matches (verify these)", uncertainWarnings));
+
+  if (result.skippedPantryIngredients.length > 0) {
+    parts.push(`## Skipped (in pantry): ${result.skippedPantryIngredients.join(", ")}`);
   }
 
   return parts.join("\n");
+}
+
+/** Existing structured-plus-text compatibility contract for internal callers. */
+export interface ShoppingListResult {
+  text: string;
+  matchSummary: DealMatchSummary;
+  priceSummary: ShoppingPriceSummary;
+  /** Legacy matched-deal purchase subtotal retained for existing callers. */
+  grandTotal: number;
+}
+
+export async function buildShoppingListResult(
+  selectedRecipes: Recipe[],
+  householdSize: number,
+  existingDealMap?: Map<string, Offer[]>,
+  excludePantry = true,
+): Promise<ShoppingListResult> {
+  const result = await buildShoppingListForRecipes(
+    selectedRecipes,
+    householdSize,
+    existingDealMap,
+    excludePantry,
+  );
+  return {
+    text: formatShoppingList(result),
+    matchSummary: result.matchSummary,
+    priceSummary: result.priceSummary,
+    grandTotal: result.grandTotal,
+  };
+}
+
+/** Preserve the existing text-only shopping-list contract for MCP callers. */
+export async function buildShoppingList(
+  selectedRecipes: Recipe[],
+  householdSize: number,
+  existingDealMap?: Map<string, Offer[]>,
+  excludePantry = true,
+): Promise<string> {
+  return (
+    await buildShoppingListResult(selectedRecipes, householdSize, existingDealMap, excludePantry)
+  ).text;
 }

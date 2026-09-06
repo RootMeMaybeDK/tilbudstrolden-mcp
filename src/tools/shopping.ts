@@ -2,9 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { calculateBasketCost, findOptimalWeek } from "../scoring.js";
 import { scoreRecipes } from "../services/scoring-service.js";
+import { generateShoppingList } from "../services/shopping-service.js";
 import * as store from "../store.js";
 import { errorResult } from "./shared.js";
-import { buildShoppingList } from "./shopping-list.js";
+import { buildShoppingList, formatShoppingList } from "./shopping-list.js";
 
 interface ShoppingListArgs {
   recipes: string[];
@@ -14,14 +15,14 @@ interface ShoppingListArgs {
 
 async function handleGenerateShoppingList({ recipes, people, excludePantry }: ShoppingListArgs) {
   try {
-    const allRecipes = await store.getRecipes();
+    const result = await generateShoppingList({
+      recipeNames: recipes,
+      people,
+      excludePantry,
+    });
 
-    const selectedRecipes = allRecipes.filter((r) =>
-      recipes.some((n) => r.name.toLowerCase() === n.toLowerCase()),
-    );
-
-    if (selectedRecipes.length === 0) {
-      const available = allRecipes.map((r) => r.name).join(", ");
+    if (result.status === "no-matching-recipes") {
+      const available = result.availableRecipeNames.join(", ");
       return {
         content: [
           {
@@ -31,13 +32,8 @@ async function handleGenerateShoppingList({ recipes, people, excludePantry }: Sh
         ],
       };
     }
-
-    const household = await store.getHousehold();
-    const householdSize = people ?? (household.people.length || household.defaultServings);
-
-    const text = await buildShoppingList(selectedRecipes, householdSize, undefined, excludePantry);
     return {
-      content: [{ type: "text" as const, text }],
+      content: [{ type: "text" as const, text: formatShoppingList(result) }],
     };
   } catch (err) {
     return errorResult(

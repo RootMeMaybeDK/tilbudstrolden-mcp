@@ -13,6 +13,7 @@ vi.mock("../store.js", () => ({
 }));
 
 const store = await import("../store.js");
+const { formatExpiryStatus, getDealExpiry } = await import("../deal-expiry.js");
 const {
   daysUntilExpiry,
   errorResult,
@@ -96,6 +97,35 @@ describe("expiryTag", () => {
     expect(expiryTag("2026-06-16T00:00:00Z")).toBe(" [EXPIRES TODAY]");
     expect(expiryTag("2026-06-15T18:00:00Z")).toBe(" [EXPIRES TODAY]");
     expect(expiryTag("2026-06-14T00:00:00Z")).toBe(" [EXPIRED]");
+  });
+});
+
+describe("getDealExpiry", () => {
+  it("returns days and typed status from the same explicit clock snapshot", () => {
+    expect(getDealExpiry("2026-06-17T00:00:00Z", NOW)).toEqual({
+      daysRemaining: 2,
+      status: "expires-tomorrow",
+    });
+    expect(getDealExpiry("2026-06-16T00:00:00Z", NOW)).toEqual({
+      daysRemaining: 1,
+      status: "expires-today",
+    });
+    expect(getDealExpiry("2026-06-14T00:00:00Z", NOW)).toEqual({
+      daysRemaining: -1,
+      status: "expired",
+    });
+    expect(getDealExpiry(null, NOW)).toEqual({ daysRemaining: 999, status: "none" });
+    const invalid = getDealExpiry("not-a-date", NOW);
+    expect(Number.isNaN(invalid.daysRemaining)).toBe(true);
+    expect(invalid.status).toBe("none");
+    expect(expiryTag("not-a-date")).toBe("");
+  });
+
+  it("keeps compatibility labels as a pure status mapping", () => {
+    expect(formatExpiryStatus("none")).toBe("");
+    expect(formatExpiryStatus("expired")).toBe(" [EXPIRED]");
+    expect(formatExpiryStatus("expires-today")).toBe(" [EXPIRES TODAY]");
+    expect(formatExpiryStatus("expires-tomorrow")).toBe(" [EXPIRES TOMORROW]");
   });
 });
 

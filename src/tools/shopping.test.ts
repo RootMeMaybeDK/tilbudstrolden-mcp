@@ -1,14 +1,15 @@
 /**
  * Unit tests for src/tools/shopping.ts — generate_shopping_list and plan_and_shop.
  *
- * The api and store layers are mocked; src/scoring.ts and src/tools/scoring.ts
- * run for real, so quantity aggregation, whole-pack costing, store grouping,
- * and the weekly optimiser are all exercised end to end.
+ * The api and store layers are mocked; core scoring and the shared services run
+ * for real, so quantity aggregation, whole-pack costing, store grouping, and
+ * the weekly optimiser are all exercised end to end.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callTool, createServerStub, type ServerStub, textOf } from "../../test/mcp-harness.js";
 import type { Offer } from "../api.js";
+import { getLocale } from "../locales.js";
 import type { Household, Recipe } from "../store.js";
 
 vi.mock("../api.js", async (importOriginal) => {
@@ -24,7 +25,8 @@ vi.mock("../store.js", () => ({
 
 const api = await import("../api.js");
 const store = await import("../store.js");
-const { buildShoppingListResult } = await import("./shopping-list.js");
+const { buildShoppingListFromRecipes } = await import("../services/shopping-service.js");
+const { buildShoppingListResult, formatShoppingList } = await import("./shopping-list.js");
 const { registerShoppingTools } = await import("./shopping.js");
 
 const NOW = new Date("2026-06-15T12:00:00Z");
@@ -163,6 +165,120 @@ describe("generate_shopping_list", () => {
     expect(text).toContain("[500 g/pack, 90.00 kr/kg]");
     expect(text).toContain("(250 g leftover)");
     expect(text).toContain("-- Hakket oksekød 8-12% @ Netto until 2026-06-30");
+  });
+
+  it("preserves the complete deterministic shopping-list output", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        name: "Golden",
+        ingredients: [
+          {
+            name: "Hakket oksekød",
+            quantity: "500g",
+            searchTerms: ["hakket oksekød"],
+            category: "meat",
+          },
+          {
+            name: "Enhjørning",
+            quantity: "1 stk",
+            searchTerms: ["enhjørning"],
+            category: "other",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([["hakket oksekød", [makeOffer({ validUntil: "2026-06-16T00:00:00Z" })]]]),
+    );
+
+    const text = textOf(
+      await callTool(stub, "generate_shopping_list", {
+        recipes: ["Golden"],
+      }),
+    );
+
+    expect(text).toBe(
+      [
+        "Shopping list for: Golden (2 people)",
+        "Matched-deal purchase subtotal: 45 DKK (not a full basket total)",
+        "Confirmed deal subtotal: 45 DKK",
+        "Uncertain-match subtotal: 0 DKK",
+        "Confirmed matches: 1",
+        "Uncertain matches: 0",
+        "Items without matched deal price: 1",
+        "",
+        "## ⏰ Buy first (expiring soon)",
+        "- Hakket oksekød: deal at Netto [expires today] (2026-06-16)",
+        "",
+        "## Netto (1 items)",
+        "1. Hakket oksekød: need 250 g -> 45 kr = 45 kr [500 g/pack, 90.00 kr/kg] (250 g leftover) -- Hakket oksekød 8-12% @ Netto until 2026-06-16 [EXPIRES TODAY]",
+        "",
+        "## Buy at regular price (1 items)",
+        "- Enhjørning (0.5 stk) [Golden]",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("formats the service expiry snapshot without reading the later clock", async () => {
+    const offer = makeOffer({ validUntil: "2026-06-17T00:00:00Z" });
+    const result = await buildShoppingListFromRecipes({
+      selectedRecipes: [beefRecipe()],
+      householdSize: 2,
+      pantry: [],
+      excludePantry: true,
+      preferredStores: new Set(),
+      locale: getLocale("DK"),
+      existingDealMap: new Map([["hakket oksekød", [offer]]]),
+    });
+    expect(result.items[0].expiryStatus).toBe("expires-tomorrow");
+
+    vi.setSystemTime(new Date("2026-06-18T12:00:00Z"));
+    const text = formatShoppingList(result);
+
+    expect(text).toContain("until 2026-06-17 [EXPIRES TOMORROW]");
+    expect(text).toContain("deal at Netto [expires tomorrow] (2026-06-17)");
+    expect(text).not.toContain("[EXPIRED]");
+    expect(text).not.toContain("[EXPIRES TODAY]");
+  });
+
+  it("keeps the legacy expiry-before-uncertain warning section order", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue([
+      beefRecipe({
+        ingredients: [
+          {
+            name: "Mælk",
+            quantity: "5 dl",
+            searchTerms: ["mælk"],
+            category: "other",
+          },
+          {
+            name: "Hakket oksekød",
+            quantity: "500g",
+            searchTerms: ["hakket oksekød"],
+            category: "meat",
+          },
+        ],
+      }),
+    ]);
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(
+      new Map([
+        [
+          "mælk",
+          [
+            makeOffer({ id: "milk-1", heading: "Øko mælk eller fløde", price: 12 }),
+            makeOffer({ id: "milk-2", heading: "Sød mælk eller kærnemælk", price: 14 }),
+          ],
+        ],
+        ["hakket oksekød", [makeOffer({ validUntil: "2026-06-16T00:00:00Z" })]],
+      ]),
+    );
+
+    const text = textOf(await callTool(stub, "generate_shopping_list", { recipes: ["Bolognese"] }));
+
+    expect(text.indexOf("## ⏰ Buy first (expiring soon)")).toBeLessThan(
+      text.indexOf("## ⚠ Uncertain matches (verify these)"),
+    );
   });
 
   it("passes dealer IDs to retrieval and groups a foetex/Føtex ID match", async () => {
@@ -1043,6 +1159,40 @@ describe("plan_and_shop", () => {
     expect(text.slice(divider)).toContain("Shopping list for:");
     expect(text.slice(divider)).toContain("Matched-deal purchase subtotal:");
     expect(text.slice(divider)).toContain("## Netto");
+  });
+
+  it("preserves the complete deterministic plan-and-shopping output", async () => {
+    vi.mocked(store.getRecipes).mockResolvedValue(library(2));
+    vi.mocked(api.searchDealsBatch).mockResolvedValue(beefDeals());
+
+    const text = textOf(await callTool(stub, "plan_and_shop", { days: 2 }));
+
+    expect(text).toBe(
+      [
+        "# 2-day meal plan (2 people)",
+        "",
+        "Matched-deal planning estimate (not a full basket total): ~22.5 DKK",
+        "Shared matched-deal estimate savings: ~22.5 DKK",
+        "",
+        "Day 1: Recipe 1 (matched-deal estimate: ~22.5 DKK) [beef, italian, medium]",
+        "Day 2: Recipe 2 (matched-deal estimate: ~22.5 DKK) [chicken, asian, medium]",
+        "",
+        "---",
+        "",
+        "Shopping list for: Recipe 1, Recipe 2 (2 people)",
+        "Matched-deal purchase subtotal: 45 DKK (not a full basket total)",
+        "Confirmed deal subtotal: 45 DKK",
+        "Uncertain-match subtotal: 0 DKK",
+        "Confirmed matches: 1",
+        "Uncertain matches: 0",
+        "Items without matched deal price: 0",
+        "",
+        "## Netto (1 items)",
+        "1. Hakket oksekød: need 250 g + 250 g = 500 g -> 45 kr = 45 kr [500 g/pack, 90.00 kr/kg] -- Hakket oksekød 8-12% @ Netto until 2026-06-30",
+        "",
+      ].join("\n"),
+    );
+    expect(api.searchDealsBatch).toHaveBeenCalledTimes(1);
   });
 
   it("reuses the cached deal map rather than searching twice", async () => {
