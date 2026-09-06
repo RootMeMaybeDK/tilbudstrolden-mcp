@@ -36,6 +36,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
+    "http:start": "node dist/http/server.js",
+    "http:dev": "tsx watch src/http/server.ts",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
     "format": "biome format --write src/",
@@ -46,8 +48,10 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@hono/node-server": "^1.19.17",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "fs-ext": "2.1.1",
+    "hono": "^4.13.7",
     "zod": "^4.3.6"
   },
   "overrides": {
