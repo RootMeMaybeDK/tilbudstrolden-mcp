@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { isValidCountry, SUPPORTED_COUNTRIES } from "../locales.js";
+import { SUPPORTED_COUNTRIES } from "../locales.js";
+import { updateHouseholdSettings } from "../services/household-service.js";
+import { updatePantryItems } from "../services/pantry-service.js";
 import * as store from "../store.js";
 import { errorResult } from "./shared.js";
 
@@ -39,16 +41,6 @@ async function handleGetHousehold() {
   );
 }
 
-const ALL_DAYS_HOME = {
-  monday: true,
-  tuesday: true,
-  wednesday: true,
-  thursday: true,
-  friday: true,
-  saturday: true,
-  sunday: true,
-};
-
 interface UpdateHouseholdArgs {
   country?: string;
   people?: Array<{
@@ -60,42 +52,21 @@ interface UpdateHouseholdArgs {
   defaultServings?: number;
 }
 
-/** Translate the tool arguments into a Household patch. Returns null on an invalid country. */
-function buildHouseholdUpdates(args: UpdateHouseholdArgs): Partial<store.Household> | null {
-  const { country, people, stores: storePrefs, defaultServings } = args;
-  const updates: Partial<store.Household> = {};
-
-  if (country) {
-    if (!isValidCountry(country)) return null;
-    updates.country = country.toUpperCase();
-  }
-  if (people) {
-    updates.people = people.map((p) => ({
-      ...p,
-      defaultSchedule: { ...ALL_DAYS_HOME, ...p.defaultSchedule },
-    }));
-  }
-  if (storePrefs) updates.stores = storePrefs;
-  if (defaultServings) updates.defaultServings = defaultServings;
-
-  return updates;
-}
-
 async function handleUpdateHousehold(args: UpdateHouseholdArgs) {
-  const updates = buildHouseholdUpdates(args);
-  if (!updates) {
+  const result = await updateHouseholdSettings(args);
+  if (result.status === "invalid-country") {
     return errorResult(
-      `Invalid country code "${args.country}". Supported: ${SUPPORTED_COUNTRIES.join(", ")}`,
+      `Invalid country code "${result.country}". Supported: ${result.supportedCountries.join(", ")}`,
     );
   }
-  const household = await store.updateHousehold(updates);
+  const { household } = result;
   return textResult(
     `Household updated: ${household.country} market, ${household.people.length} people, ${household.stores.length} stores, default ${household.defaultServings} servings.`,
   );
 }
 
 async function handleUpdatePantry({ add, remove }: { add: string[]; remove: string[] }) {
-  const pantry = await store.updatePantry(add, remove);
+  const { pantry } = await updatePantryItems({ add, remove });
   return textResult(`Pantry (${pantry.length} items): ${pantry.join(", ") || "(empty)"}`);
 }
 

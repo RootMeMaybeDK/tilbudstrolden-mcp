@@ -179,6 +179,51 @@ describe("update_household", () => {
     expect(text).toBe("Household updated: SE market, 1 people, 2 stores, default 4 servings.");
   });
 
+  it("preserves the complete representative update contract and exact output", async () => {
+    const text = textOf(
+      await callTool(stub, "update_household", {
+        country: "no",
+        defaultServings: 3,
+        people: [
+          {
+            name: "Ola",
+            dietaryRestrictions: ["no pork"],
+            defaultSchedule: { tuesday: false },
+          },
+        ],
+        stores: [
+          { name: "KIWI", dealerId: "257bxm", priority: 1 },
+          { name: "REMA 1000", dealerId: "ZKY0V5", priority: 2 },
+        ],
+      }),
+    );
+
+    expect(store.updateHousehold).toHaveBeenCalledWith({
+      country: "NO",
+      defaultServings: 3,
+      people: [
+        {
+          name: "Ola",
+          dietaryRestrictions: ["no pork"],
+          defaultSchedule: {
+            monday: true,
+            tuesday: false,
+            wednesday: true,
+            thursday: true,
+            friday: true,
+            saturday: true,
+            sunday: true,
+          },
+        },
+      ],
+      stores: [
+        { name: "KIWI", dealerId: "257bxm", priority: 1 },
+        { name: "REMA 1000", dealerId: "ZKY0V5", priority: 2 },
+      ],
+    });
+    expect(text).toBe("Household updated: NO market, 1 people, 2 stores, default 3 servings.");
+  });
+
   it("rejects a malformed people entry", async () => {
     await expect(
       callTool(stub, "update_household", { people: [{ name: "Olga" }] }),
