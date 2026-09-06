@@ -1,5 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  removeRecipeByName,
+  type SaveRecipeInput,
+  saveRecipe,
+} from "../services/recipe-service.js";
 import * as store from "../store.js";
 
 const NO_RECIPES_TEXT = `No recipes saved yet. Add recipes with add_recipe to get started.
@@ -30,62 +35,30 @@ async function handleGetRecipes() {
   };
 }
 
-interface AddRecipeArgs {
-  name: string;
-  servings: number;
-  complexity: "quick" | "medium" | "slow";
-  cuisineType: string;
-  proteinType: string;
-  ingredients: Array<{
-    name: string;
-    quantity: string;
-    searchTerms?: string[];
-    category?: string;
-  }>;
-}
+type AddRecipeArgs = SaveRecipeInput & { servings: number };
 
-async function handleAddRecipe({
-  name,
-  servings,
-  complexity,
-  cuisineType,
-  proteinType,
-  ingredients,
-}: AddRecipeArgs) {
-  // Apply defaults for optional fields
-  const resolvedIngredients = ingredients.map((ing) => ({
-    name: ing.name,
-    quantity: ing.quantity,
-    searchTerms:
-      ing.searchTerms && ing.searchTerms.length > 0 ? ing.searchTerms : [ing.name.toLowerCase()],
-    category: ing.category || "other",
-  }));
-
-  await store.addRecipe({
-    name,
-    servings,
-    complexity,
-    cuisineType,
-    proteinType,
-    ingredients: resolvedIngredients,
-  });
+async function handleAddRecipe(input: AddRecipeArgs) {
+  const { recipe } = await saveRecipe(input);
   return {
     content: [
       {
         type: "text" as const,
-        text: `Recipe "${name}" saved: ${complexity} ${cuisineType} (${proteinType}), ${resolvedIngredients.length} ingredients.`,
+        text: `Recipe "${recipe.name}" saved: ${recipe.complexity} ${recipe.cuisineType} (${recipe.proteinType}), ${recipe.ingredients.length} ingredients.`,
       },
     ],
   };
 }
 
 async function handleRemoveRecipe({ name }: { name: string }) {
-  const removed = await store.removeRecipe(name);
+  const result = await removeRecipeByName(name);
   return {
     content: [
       {
         type: "text" as const,
-        text: removed ? `Recipe "${name}" removed.` : `Recipe "${name}" not found.`,
+        text:
+          result.status === "removed"
+            ? `Recipe "${result.requestedName}" removed.`
+            : `Recipe "${result.requestedName}" not found.`,
       },
     ],
   };
