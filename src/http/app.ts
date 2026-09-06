@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { errorBody, handleHttpError } from "./errors.js";
 import { registerHouseholdRoutes } from "./household-routes.js";
+import { registerRecipeRoutes } from "./recipe-routes.js";
 
 /** Construct the HTTP adapter without opening a network listener. */
 export function createHttpApp() {
@@ -26,5 +27,6 @@ export function createHttpApp() {
   });
   app.get("/api/health", (c) => c.json({ status: "ok", service: "tilbudstrolden" }));
   registerHouseholdRoutes(app);
+  registerRecipeRoutes(app);
   return app;
 }
