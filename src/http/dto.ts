@@ -1,3 +1,4 @@
+import type { PlanAndShopResult } from "../services/planning-service.js";
 import type { ScoringServiceResult, StructuredScoredRecipe } from "../services/scoring-service.js";
 import type { StructuredShoppingList } from "../services/shopping-service.js";
 
@@ -67,5 +68,33 @@ export function shoppingDto(result: StructuredShoppingList) {
     matchSummary: result.matchSummary,
     priceSummary: result.priceSummary,
     grandTotal: result.grandTotal,
+  };
+}
+
+export function planningDto(result: PlanAndShopResult) {
+  const base = {
+    status: result.status,
+    days: result.days,
+    householdSize: result.householdSize,
+    country: result.country,
+    currency: result.currency,
+    constraints: result.constraints,
+    scoredRecipes: result.scoredRecipes.map(scoredRecipeDto),
+  };
+  if (result.status === "insufficient-recipes") {
+    return { ...base, availableRecipeCount: result.availableRecipeCount };
+  }
+  if (result.status === "no-valid-plan") return base;
+  return {
+    ...base,
+    plan: result.plan.map((day) => ({
+      day: day.day,
+      recipeName: day.recipeName,
+      recipe: scoredRecipeDto(day.recipe),
+      matchedDealEstimate: day.matchedDealEstimate,
+    })),
+    selectedRecipes: result.selectedRecipes,
+    planningEstimate: result.planningEstimate,
+    shopping: shoppingDto(result.shopping),
   };
 }
