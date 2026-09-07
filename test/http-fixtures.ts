@@ -2,10 +2,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { Offer } from "../src/api.js";
 import type { DataStore, Recipe } from "../src/store.js";
 import * as store from "../src/store.js";
 
 export const HTTP_BASE = "http://127.0.0.1:3000";
+
+export function makeHttpOffer(overrides: Partial<Offer> = {}): Offer {
+  return {
+    id: "beef", heading: "Hakket oksekød 8-12%", description: null,
+    price: 40, prePrice: null, currency: "DKK", quantity: 500, unit: "g", pricePerUnit: "80.00 kr/kg",
+    store: "Netto", storeId: "n1", validFrom: "2026-09-01", validUntil: "2026-09-30T00:00:00Z", imageUrl: null,
+    ...overrides,
+  };
+}
 
 export function jsonRequest(body: unknown, method = "POST"): RequestInit {
   return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
