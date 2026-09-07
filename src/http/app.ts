@@ -3,6 +3,7 @@ import { errorBody, handleHttpError } from "./errors.js";
 import { registerHouseholdRoutes } from "./household-routes.js";
 import { registerRecipeRoutes } from "./recipe-routes.js";
 import { registerScoringRoutes } from "./scoring-routes.js";
+import { registerShoppingRoutes } from "./shopping-routes.js";
 
 /** Construct the HTTP adapter without opening a network listener. */
 export function createHttpApp() {
@@ -30,5 +31,6 @@ export function createHttpApp() {
   registerHouseholdRoutes(app);
   registerRecipeRoutes(app);
   registerScoringRoutes(app);
+  registerShoppingRoutes(app);
   return app;
 }

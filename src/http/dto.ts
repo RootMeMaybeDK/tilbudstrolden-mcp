@@ -1,4 +1,5 @@
 import type { ScoringServiceResult, StructuredScoredRecipe } from "../services/scoring-service.js";
+import type { StructuredShoppingList } from "../services/shopping-service.js";
 
 /** Only reportable fields cross HTTP; internal Maps and locale matching configuration stay private. */
 export function scoredRecipeDto(recipe: StructuredScoredRecipe) {
@@ -42,5 +43,29 @@ export function scoringDto(result: ScoringServiceResult) {
     currency: result.currency,
     pantry: result.pantry,
     scoredRecipes: result.scored.map(scoredRecipeDto),
+  };
+}
+
+/** Preserve the service's quantity, purchase and expiry snapshot without recomputation. */
+export function shoppingDto(result: StructuredShoppingList) {
+  return {
+    status: result.status,
+    requestedRecipeNames: result.requestedRecipeNames,
+    selectedRecipes: result.selectedRecipes,
+    unknownRecipeNames: result.unknownRecipeNames,
+    householdSize: result.householdSize,
+    country: result.locale.country,
+    currency: result.locale.currency,
+    pantryExclusionEnabled: result.pantryExclusionEnabled,
+    pantry: result.pantry,
+    skippedPantryIngredients: result.skippedPantryIngredients,
+    items: result.items,
+    matchedItems: result.matchedItems,
+    unmatchedItems: result.unmatchedItems,
+    storeGroups: result.storeGroups,
+    warnings: result.warnings,
+    matchSummary: result.matchSummary,
+    priceSummary: result.priceSummary,
+    grandTotal: result.grandTotal,
   };
 }
