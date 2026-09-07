@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { registerDealRoutes } from "./deal-routes.js";
 import { errorBody, handleHttpError } from "./errors.js";
 import { registerHouseholdRoutes } from "./household-routes.js";
 import { registerPlanningRoutes } from "./planning-routes.js";
@@ -34,5 +35,6 @@ export function createHttpApp() {
   registerScoringRoutes(app);
   registerShoppingRoutes(app);
   registerPlanningRoutes(app);
+  registerDealRoutes(app);
   return app;
 }

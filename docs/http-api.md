@@ -52,8 +52,13 @@ Expected computation failures also include a `result` object with resolution/pla
 | `POST /api/recipes/score` | Optional `people` | Scoring DTO |
 | `POST /api/shopping-list` | `recipeNames: string[]`, optional `people`, `excludePantry` | Shopping DTO |
 | `POST /api/plan-and-shop` | Optional planning input below | Planning DTO |
+| `GET /api/stores` | None | Country, `source: "known-stores"`, `knownStores` name/alias-to-ID dictionary |
+| `POST /api/deals/search` | `query: string`, optional integer `limit` (1–100, default 20) | Raw query, country/currency, offers |
+| `GET /api/stores/:dealerId/offers` | Optional query `limit` (1–100, default 50) | Dealer ID and offers |
 
 Health does not read/write the datastore or call upstream.
+
+Store/deal reads delegate to locale data and the existing API client. The directory is curated, not exhaustive, and aliases may share an ID. Search is global within the household country and does not apply preferred-store filtering. It retains the core API's global over-fetch/country-filter behavior. HTTP passes the query string unchanged. Dealer-offer reads use the explicit ID rather than inferring a display name. Limits bound each read request; no pagination or extra multiplier was added. A weekly preferred-store rollup is deferred: its orchestration/presentation currently lives in the MCP deal tool and should be extracted into a shared read service before adding a parallel HTTP version.
 
 ### Household and pantry
 
