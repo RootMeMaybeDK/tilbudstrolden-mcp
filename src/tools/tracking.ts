@@ -1,13 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getLocale } from "../locales.js";
-import * as store from "../store.js";
-
-/** The currency symbol configured for the household's country */
-async function householdCurrencySymbol(): Promise<string> {
-  const household = await store.getHousehold();
-  return getLocale(household.country).currencySymbol;
-}
+import {
+  readMealHistory,
+  readSpendHistory,
+  recordMeal,
+  recordSpend,
+} from "../services/tracking-service.js";
 
 function textResult(text: string) {
   return { content: [{ type: "text" as const, text }] };
@@ -20,12 +18,12 @@ interface LogMealArgs {
 }
 
 async function handleLogMeal({ date, recipe, people }: LogMealArgs) {
-  await store.logMeal({ date, recipe, people });
+  await recordMeal({ date, recipe, people });
   return textResult(`Logged: ${recipe} on ${date} for ${people.join(", ")}.`);
 }
 
 async function handleGetMealHistory({ weeks }: { weeks: number }) {
-  const history = await store.getMealHistory(weeks);
+  const { entries: history } = await readMealHistory(weeks);
   if (history.length === 0) {
     return textResult("No meal history yet. Use log_meal to start tracking.");
   }
@@ -50,27 +48,24 @@ async function handleLogSpend({
   items,
   notes,
 }: LogSpendArgs) {
-  await store.logSpend({
+  const { currencySymbol: sym } = await recordSpend({
     date,
     store: storeName,
     estimatedTotal,
     items,
     notes,
   });
-  const sym = await householdCurrencySymbol();
   return textResult(
     `Logged: ${estimatedTotal} ${sym} at ${storeName} on ${date} (${items} items).`,
   );
 }
 
 async function handleGetSpendLog({ weeks }: { weeks: number }) {
-  const log = await store.getSpendLog(weeks);
-  if (log.length === 0) {
+  const result = await readSpendHistory(weeks);
+  if (result.status === "empty") {
     return textResult("No spending recorded yet. Use log_spend to start tracking.");
   }
-  const total = log.reduce((sum, s) => sum + s.estimatedTotal, 0);
-  const avgPerWeek = total / weeks;
-  const sym = await householdCurrencySymbol();
+  const { entries: log, total, averagePerWeek: avgPerWeek, currencySymbol: sym } = result;
   const lines = log.map(
     (s) =>
       `- ${s.date}: ${s.estimatedTotal} ${sym} @ ${s.store} (${s.items} items)${s.notes ? ` - ${s.notes}` : ""}`,
