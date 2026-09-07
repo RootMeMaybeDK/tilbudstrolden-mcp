@@ -181,6 +181,8 @@ TILBUDSTROLDEN_DATA=/custom/path/to/data.json
 
 ## Tools
 
+For the separate localhost-only HTTP foundation, see [HTTP API documentation](docs/http-api.md). It reuses the shared services and does not change MCP's stdio transport.
+
 ### Deals
 | Tool | What it does |
 |------|-------------|
