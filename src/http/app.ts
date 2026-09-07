@@ -6,6 +6,7 @@ import { registerPlanningRoutes } from "./planning-routes.js";
 import { registerRecipeRoutes } from "./recipe-routes.js";
 import { registerScoringRoutes } from "./scoring-routes.js";
 import { registerShoppingRoutes } from "./shopping-routes.js";
+import { registerTrackingRoutes } from "./tracking-routes.js";
 
 /** Construct the HTTP adapter without opening a network listener. */
 export function createHttpApp() {
@@ -36,5 +37,6 @@ export function createHttpApp() {
   registerShoppingRoutes(app);
   registerPlanningRoutes(app);
   registerDealRoutes(app);
+  registerTrackingRoutes(app);
   return app;
 }

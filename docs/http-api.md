@@ -55,6 +55,10 @@ Expected computation failures also include a `result` object with resolution/pla
 | `GET /api/stores` | None | Country, `source: "known-stores"`, `knownStores` name/alias-to-ID dictionary |
 | `POST /api/deals/search` | `query: string`, optional integer `limit` (1–100, default 20) | Raw query, country/currency, offers |
 | `GET /api/stores/:dealerId/offers` | Optional query `limit` (1–100, default 50) | Dealer ID and offers |
+| `GET /api/meal-history` | Optional numeric query `weeks`, default 4 | `weeks`, `entries` |
+| `POST /api/meals` | `date`, `recipe`, `people: string[]` | `status: "logged"`, `entry` |
+| `GET /api/spend-log` | Optional numeric query `weeks`, default 8 | Empty/ready status, weeks, entries; totals/currency when ready |
+| `POST /api/spend` | `date`, `store`, `estimatedTotal: number`, `items: number`, optional `notes` | Logged entry and currency context |
 
 Health does not read/write the datastore or call upstream.
 
@@ -130,6 +134,12 @@ Defaults: `days=7`, `maxPerProtein=2`, `maxPerCuisine=2`, `maxSlowDays=2`. Optio
 Success includes `status: "ok"`, days, household/country/currency context, constraints, scored recipes, planned days, selected recipes, `planningEstimate`, and a nested shopping DTO. Each day contains `day`, `recipeName`, a scored recipe DTO and `matchedDealEstimate`. Planning order and selected-library/shopping order may differ, as determined by the service.
 
 Insufficient recipes and impossible constraints return 422 with `result.status` set to `insufficient-recipes` or `no-valid-plan`. The route neither calculates costs nor selects recipes. Scoring's existing deal map is reused by shopping within the service: integration tests assert exactly one `searchDealsBatch` call, including an empty-map case. The map never crosses HTTP.
+
+## Tracking caveat
+
+Tracking routes use the same `tracking-service` as MCP. Dates, names, notes and amounts retain existing permissive behavior. Meal writes replace the first same-date/case-insensitive-name match; spend writes append. Missing notes default to an empty string. History filtering/sorting remains in the store; default lookbacks are 4 and 8 weeks. The legacy spend field `estimatedTotal` is a user-entered recorded amount, unrelated to the matched-deal estimates below. A zero-week spending history may contain `averagePerWeek: null` because a non-finite JavaScript average cannot be represented in JSON; no domain rounding or validation policy is changed.
+
+**Do not automatically retry spend POSTs after a failed response.** The existing flow commits the spend and then reads the household currency. If that read fails, HTTP returns 500/503 although the spend may already be persisted. Inspect spending history before retrying; no idempotency key or transactional response redesign is included. Tests prove this post-commit failure behavior. An empty spend history does not perform the currency read.
 
 ## Price semantics
 
