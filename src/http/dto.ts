@@ -1,9 +1,17 @@
+import type {
+  PlanAndShopHttpResponse,
+  RecipeScoringHttpResponse,
+  ScoredRecipeHttpDto,
+  ShoppingHttpResponse,
+  SpendHistoryHttpResponse,
+} from "../contracts/http.js";
 import type { PlanAndShopResult } from "../services/planning-service.js";
 import type { ScoringServiceResult, StructuredScoredRecipe } from "../services/scoring-service.js";
 import type { StructuredShoppingList } from "../services/shopping-service.js";
+import type { readSpendHistory } from "../services/tracking-service.js";
 
 /** Only reportable fields cross HTTP; internal Maps and locale matching configuration stay private. */
-export function scoredRecipeDto(recipe: StructuredScoredRecipe) {
+export function scoredRecipeDto(recipe: StructuredScoredRecipe): ScoredRecipeHttpDto {
   return {
     name: recipe.name,
     servings: recipe.servings,
@@ -37,7 +45,7 @@ export function scoredRecipeDto(recipe: StructuredScoredRecipe) {
   };
 }
 
-export function scoringDto(result: ScoringServiceResult) {
+export function scoringDto(result: ScoringServiceResult): RecipeScoringHttpResponse {
   return {
     householdSize: result.householdSize,
     country: result.country,
@@ -48,7 +56,7 @@ export function scoringDto(result: ScoringServiceResult) {
 }
 
 /** Preserve the service's quantity, purchase and expiry snapshot without recomputation. */
-export function shoppingDto(result: StructuredShoppingList) {
+export function shoppingDto(result: StructuredShoppingList): ShoppingHttpResponse {
   return {
     status: result.status,
     requestedRecipeNames: result.requestedRecipeNames,
@@ -67,13 +75,11 @@ export function shoppingDto(result: StructuredShoppingList) {
     warnings: result.warnings,
     matchSummary: result.matchSummary,
     priceSummary: result.priceSummary,
-    grandTotal: result.grandTotal,
   };
 }
 
-export function planningDto(result: PlanAndShopResult) {
+export function planningDto(result: PlanAndShopResult): PlanAndShopHttpResponse {
   const base = {
-    status: result.status,
     days: result.days,
     householdSize: result.householdSize,
     country: result.country,
@@ -82,11 +88,12 @@ export function planningDto(result: PlanAndShopResult) {
     scoredRecipes: result.scoredRecipes.map(scoredRecipeDto),
   };
   if (result.status === "insufficient-recipes") {
-    return { ...base, availableRecipeCount: result.availableRecipeCount };
+    return { ...base, status: result.status, availableRecipeCount: result.availableRecipeCount };
   }
-  if (result.status === "no-valid-plan") return base;
+  if (result.status === "no-valid-plan") return { ...base, status: result.status };
   return {
     ...base,
+    status: result.status,
     plan: result.plan.map((day) => ({
       day: day.day,
       recipeName: day.recipeName,
@@ -96,5 +103,23 @@ export function planningDto(result: PlanAndShopResult) {
     selectedRecipes: result.selectedRecipes,
     planningEstimate: result.planningEstimate,
     shopping: shoppingDto(result.shopping),
+  };
+}
+
+/** Mirror JSON's non-finite-number handling without changing service calculations. */
+export function spendHistoryDto(
+  result: Awaited<ReturnType<typeof readSpendHistory>>,
+): SpendHistoryHttpResponse {
+  if (result.status === "empty") {
+    return { status: result.status, weeks: result.weeks, entries: result.entries };
+  }
+  return {
+    status: result.status,
+    weeks: result.weeks,
+    entries: result.entries,
+    total: result.total,
+    averagePerWeek: Number.isFinite(result.averagePerWeek) ? result.averagePerWeek : null,
+    currency: result.currency,
+    currencySymbol: result.currencySymbol,
   };
 }

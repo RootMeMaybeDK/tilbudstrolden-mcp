@@ -37,6 +37,12 @@ All successful responses and errors are JSON. POST/PATCH bodies must be JSON obj
 
 Expected computation failures also include a `result` object with resolution/planning context. Invalid persisted JSON/schema is a server failure (500), not a malformed request (400). Upstream exceptions reaching the adapter produce 500. The adapter does not retry operations.
 
+### Shared response types
+
+`src/contracts/http.ts` contains explicit HTTP response types only, with no imports or runtime dependencies. A TypeScript frontend may use `import type` from this module without importing Hono, Node, datastore or service execution types. DTO builders declare these return types, and the remaining routes check their response bodies with `satisfies`.
+
+Central contracts include `HouseholdHttpResponse`, `PantryHttpResponse`, `RecipesHttpResponse`, `RecipeScoringHttpResponse`, `ShoppingHttpResponse`, `PlanAndShopHttpResponse`, store/deal responses, tracking/history responses and `ErrorHttpResponse`. Computation-error contracts additionally describe the 422 `result` envelope. These are response contracts, not new request validation rules.
+
 ## Endpoints
 
 | Method/path | Input | Success body |
@@ -113,7 +119,9 @@ curl http://127.0.0.1:3000/api/shopping-list \
   -d '{"recipeNames":["Tomatrisotto","Chili con Carne"],"people":3}'
 ```
 
-`excludePantry` defaults to true in the service. Result status is `ready` or `nothing-to-buy`. Response includes requested names, selected recipes, unknown names, household size, country/currency, pantry context, items, matched/unmatched items, store groups, warnings, `matchSummary`, `priceSummary`, and legacy `grandTotal`. Some unknown names alongside valid recipes do not fail the request; no matching recipes returns 422 plus available recipe names.
+`excludePantry` defaults to true in the service. Result status is `ready` or `nothing-to-buy`. Response includes requested names, selected recipes, unknown names, household size, country/currency, pantry context, items, matched/unmatched items, store groups, warnings, `matchSummary` and `priceSummary`. Some unknown names alongside valid recipes do not fail the request; no matching recipes returns 422 plus available recipe names.
+
+Use `priceSummary.matchedPurchaseSubtotal` as the authoritative GUI purchase subtotal. No legacy raw-total field is exposed by HTTP, including nested planning shopping responses. Service/MCP totals and calculations are unchanged. Store groups remain display-name groups, not stable dealer identities; use each selected offer's `storeId` for item identity. Do not reconstruct IDs from names or assume a name-based group always represents one dealer ID.
 
 Items retain all structured service fields: quantities/aggregates/contributions, selected offer, confidence and alternatives, purchase calculation, matched purchase subtotal, and expiry snapshot. Mixed units remain separate contributions with a null aggregate. Semantic cooking units do not imply compatible retail packaging.
 
@@ -135,11 +143,17 @@ Success includes `status: "ok"`, days, household/country/currency context, const
 
 Insufficient recipes and impossible constraints return 422 with `result.status` set to `insufficient-recipes` or `no-valid-plan`. The route neither calculates costs nor selects recipes. Scoring's existing deal map is reused by shopping within the service: integration tests assert exactly one `searchDealsBatch` call, including an empty-map case. The map never crosses HTTP.
 
+`PlanAndShopHttpResponse` is the discriminated union of the success body and the two possible 422 `result` bodies. Narrowing on `status === "ok"` exposes `plan` and `shopping` without casts. `insufficient-recipes` has `availableRecipeCount`; `no-valid-plan` does not. Neither failure variant has success-only fields. `PlanAndShopHttpErrorResponse` describes the outer 422 error envelope. Common 400/500/503 errors use `ErrorHttpResponse` without a planning result.
+
 ## Tracking caveat
 
 Tracking routes use the same `tracking-service` as MCP. Dates, names, notes and amounts retain existing permissive behavior. Meal writes replace the first same-date/case-insensitive-name match; spend writes append. Missing notes default to an empty string. History filtering/sorting remains in the store; default lookbacks are 4 and 8 weeks. The legacy spend field `estimatedTotal` is a user-entered recorded amount, unrelated to the matched-deal estimates below. A zero-week spending history may contain `averagePerWeek: null` because a non-finite JavaScript average cannot be represented in JSON; no domain rounding or validation policy is changed.
 
+For `SpendHistoryHttpResponse` with `status: "ready"`, `averagePerWeek` is explicitly `number | null`. The HTTP projection makes the existing JSON null conversion explicit; finite averages, service calculations and permissive `weeks` inputs are unchanged. Empty history retains its smaller `status: "empty"` response without totals or currency.
+
 **Do not automatically retry spend POSTs after a failed response.** The existing flow commits the spend and then reads the household currency. If that read fails, HTTP returns 500/503 although the spend may already be persisted. Inspect spending history before retrying; no idempotency key or transactional response redesign is included. Tests prove this post-commit failure behavior. An empty spend history does not perform the currency read.
+
+The future GUI must disable double-submit while the request is pending, disable automatic retries for spend POST, explain that a record may already be saved after an ambiguous failure, and offer a spend-history refresh before any manual retry. A 5xx or lost response is not proof that no write occurred.
 
 ## Price semantics
 
@@ -148,7 +162,7 @@ These amounts are **not full recipe or basket prices**. Unmatched items have no 
 - Recipe `matchedDealEstimate` and ingredient `ingredientEstimate` are proportional recipe-requirement estimates from matched offers.
 - `priceSummary` separates confirmed and uncertain estimates/subtotals. `matchSummary` includes eligible, confirmed, low-confidence and unmatched counts plus confirmed/candidate coverage.
 - Shopping `selectedOffer.price` is the sticker price. `purchase.totalCost` is pack-aware where quantities are compatible; item `matchedPurchaseSubtotal` carries the service's contribution, or null if unmatched. When no compatible pack calculation exists, existing sticker-price fallback remains.
-- Shopping `priceSummary.matchedPurchaseSubtotal` is the currency-rounded matched-deal purchase subtotal. `grandTotal` retains the legacy raw sum and may have floating-point representation differences; it is not a full basket total.
+- Shopping `priceSummary.matchedPurchaseSubtotal` is the authoritative currency-rounded matched-deal purchase subtotal, not a full basket total. Confirmed and uncertain subtotals remain separate; unknown prices are excluded.
 - `planningEstimate.matchedDealPlanningEstimate` is the planner's existing matched-deal estimate, not the shopping checkout subtotal. No normal-price data is invented.
 
 ## Persistence, tests and review
@@ -156,6 +170,8 @@ These amounts are **not full recipe or basket prices**. Unmatched items have no 
 All writes delegate through shared mutation services to existing store primitives. State-dependent decisions remain inside `modify()` under the process mutex and kernel flock, followed by atomic persistence. The HTTP work does not change store locking, schemas, matching, quantities or planner algorithms.
 
 Run `npm test -- src/http` for HTTP tests, or `npm test` for all regressions. HTTP integration tests create unique absolute temp datastore paths, block accidental live fetches, and call the app in memory without opening TCP. Listener tests mock the Node adapter. Test fixtures never use the authoritative user datastore.
+
+Run `npm test -- src/contracts/http.test.ts` for the contract tests. They invoke the existing TypeScript compiler with `noEmit` to check the type assertions, including negative assertions, because normal Vitest execution transpiles tests and the production tsconfig excludes test files. The full suite runs this check too. No type-test dependency was added.
 
 The initial combined review (2026-09-07) classified the localhost foundation **B: ready with non-blocking limitations**. No HTTP-to-MCP imports, mutation pre-reads, internal Map leaks, duplicate computation, or expiry re-decisions were found. Store and MCP entrypoint are unchanged. Remaining concerns before broader deployment include authentication/exposure design, request resource limits, restore rehearsal and dependency advisories; this document is not a deployment runbook.
 

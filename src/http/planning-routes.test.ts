@@ -38,6 +38,19 @@ describe("plan-and-shop HTTP route", () => {
     const res = await request({ days: 2 });
     expect(res.status).toBe(200);
     const body = await res.json();
+    expect(Object.keys(body).sort()).toEqual([
+      "constraints",
+      "country",
+      "currency",
+      "days",
+      "householdSize",
+      "plan",
+      "planningEstimate",
+      "scoredRecipes",
+      "selectedRecipes",
+      "shopping",
+      "status",
+    ]);
     expect(body).toMatchObject({
       status: "ok",
       days: 2,
@@ -57,6 +70,7 @@ describe("plan-and-shop HTTP route", () => {
     expect(body.selectedRecipes.map((r: { name: string }) => r.name)).toEqual(["Chili", "Apples"]);
     expect(body.shopping.selectedRecipes).toEqual(body.selectedRecipes);
     expect(body.shopping.priceSummary.matchedPurchaseSubtotal).toBe(60);
+    expect(body.shopping).not.toHaveProperty("grandTotal");
     expect(body.shopping.items[0].selectedOffer).toMatchObject({ storeId: "n1", price: 40 });
     expect(JSON.stringify(body)).not.toMatch(/dealMap|synonymMap|ingredientTags|estimatedCost|##/);
     expect(batch).toHaveBeenCalledTimes(1);
@@ -124,6 +138,16 @@ describe("plan-and-shop HTTP route", () => {
       },
     });
     expect(body.result).not.toHaveProperty("shopping");
+    expect(Object.keys(body.result).sort()).toEqual([
+      "availableRecipeCount",
+      "constraints",
+      "country",
+      "currency",
+      "days",
+      "householdSize",
+      "scoredRecipes",
+      "status",
+    ]);
     expect(batch).toHaveBeenCalledTimes(1);
   });
 
@@ -140,6 +164,15 @@ describe("plan-and-shop HTTP route", () => {
       result: { status: "no-valid-plan" },
     });
     expect(body.result).not.toHaveProperty("shopping");
+    expect(Object.keys(body.result).sort()).toEqual([
+      "constraints",
+      "country",
+      "currency",
+      "days",
+      "householdSize",
+      "scoredRecipes",
+      "status",
+    ]);
     expect(batch).toHaveBeenCalledTimes(1);
   });
 

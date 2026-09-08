@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { HealthHttpResponse } from "../contracts/http.js";
 import { registerDealRoutes } from "./deal-routes.js";
 import { errorBody, handleHttpError } from "./errors.js";
 import { registerHouseholdRoutes } from "./household-routes.js";
@@ -30,7 +31,9 @@ export function createHttpApp() {
     }
     await next();
   });
-  app.get("/api/health", (c) => c.json({ status: "ok", service: "tilbudstrolden" }));
+  app.get("/api/health", (c) =>
+    c.json({ status: "ok", service: "tilbudstrolden" } satisfies HealthHttpResponse),
+  );
   registerHouseholdRoutes(app);
   registerRecipeRoutes(app);
   registerScoringRoutes(app);

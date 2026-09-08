@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { z } from "zod";
+import type { PlanAndShopHttpErrorResponse } from "../contracts/http.js";
 import { planAndShop } from "../services/planning-service.js";
 import { planningDto } from "./dto.js";
 import { errorBody, parseJsonBody } from "./errors.js";
@@ -19,21 +20,21 @@ export function registerPlanningRoutes(app: Hono): void {
   app.post("/api/plan-and-shop", async (c) => {
     const result = await planAndShop(await parseJsonBody(c, planningInput));
     const dto = planningDto(result);
-    if (result.status === "insufficient-recipes") {
+    if (dto.status === "insufficient-recipes") {
       return c.json(
         {
           ...errorBody("INSUFFICIENT_RECIPES", "Not enough recipes for the requested days."),
           result: dto,
-        },
+        } satisfies PlanAndShopHttpErrorResponse,
         422,
       );
     }
-    if (result.status === "no-valid-plan") {
+    if (dto.status === "no-valid-plan") {
       return c.json(
         {
           ...errorBody("NO_VALID_PLAN", "No plan satisfies the requested constraints."),
           result: dto,
-        },
+        } satisfies PlanAndShopHttpErrorResponse,
         422,
       );
     }

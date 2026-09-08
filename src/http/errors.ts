@@ -1,9 +1,10 @@
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { z } from "zod";
+import type { ErrorHttpResponse, HttpErrorCode } from "../contracts/http.js";
 import { DatastoreBusyError } from "../store.js";
 
-export function errorBody(code: string, message: string) {
+export function errorBody(code: HttpErrorCode, message: string): ErrorHttpResponse {
   return { error: { code, message } };
 }
 

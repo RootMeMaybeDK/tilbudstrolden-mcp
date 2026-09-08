@@ -1,11 +1,17 @@
 import type { Hono } from "hono";
 import { z } from "zod";
+import type {
+  MealHistoryHttpResponse,
+  RecordMealHttpResponse,
+  RecordSpendHttpResponse,
+} from "../contracts/http.js";
 import {
   readMealHistory,
   readSpendHistory,
   recordMeal,
   recordSpend,
 } from "../services/tracking-service.js";
+import { spendHistoryDto } from "./dto.js";
 import { errorBody, parseJsonBody } from "./errors.js";
 
 const lookback = z.coerce.number().optional();
@@ -23,16 +29,20 @@ export function registerTrackingRoutes(app: Hono): void {
     const parsed = lookback.safeParse(c.req.query("weeks"));
     if (!parsed.success)
       return c.json(errorBody("INVALID_REQUEST", "weeks must be a number."), 400);
-    return c.json(await readMealHistory(parsed.data));
+    return c.json((await readMealHistory(parsed.data)) satisfies MealHistoryHttpResponse);
   });
-  app.post("/api/meals", async (c) => c.json(await recordMeal(await parseJsonBody(c, mealInput))));
+  app.post("/api/meals", async (c) =>
+    c.json((await recordMeal(await parseJsonBody(c, mealInput))) satisfies RecordMealHttpResponse),
+  );
   app.get("/api/spend-log", async (c) => {
     const parsed = lookback.safeParse(c.req.query("weeks"));
     if (!parsed.success)
       return c.json(errorBody("INVALID_REQUEST", "weeks must be a number."), 400);
-    return c.json(await readSpendHistory(parsed.data));
+    return c.json(spendHistoryDto(await readSpendHistory(parsed.data)));
   });
   app.post("/api/spend", async (c) =>
-    c.json(await recordSpend(await parseJsonBody(c, spendInput))),
+    c.json(
+      (await recordSpend(await parseJsonBody(c, spendInput))) satisfies RecordSpendHttpResponse,
+    ),
   );
 }

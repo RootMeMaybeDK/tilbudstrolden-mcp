@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { z } from "zod";
+import type { ShoppingHttpErrorResponse } from "../contracts/http.js";
 import { generateShoppingList } from "../services/shopping-service.js";
 import { shoppingDto } from "./dto.js";
 import { errorBody, parseJsonBody } from "./errors.js";
@@ -15,7 +16,10 @@ export function registerShoppingRoutes(app: Hono): void {
     const result = await generateShoppingList(await parseJsonBody(c, shoppingInput));
     if (result.status === "no-matching-recipes") {
       return c.json(
-        { ...errorBody("NO_MATCHING_RECIPES", "No requested recipes were found."), result },
+        {
+          ...errorBody("NO_MATCHING_RECIPES", "No requested recipes were found."),
+          result,
+        } satisfies ShoppingHttpErrorResponse,
         422,
       );
     }

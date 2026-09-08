@@ -75,7 +75,6 @@ describe("shopping HTTP route", () => {
       requestedRecipeNames: ["Chili", "Unknown"],
       unknownRecipeNames: ["Unknown"],
       householdSize: 6,
-      grandTotal: 80,
     });
     expect(body.items[0]).toMatchObject({
       selectedOffer: { price: 40, storeId: "n1" },
@@ -90,6 +89,7 @@ describe("shopping HTTP route", () => {
     });
     expect(body.storeGroups).toEqual([{ storeName: "Netto", items: body.items }]);
     expect(body.priceSummary.matchedPurchaseSubtotal).toBe(80);
+    expect(body).not.toHaveProperty("grandTotal");
     expect(batch).toHaveBeenCalledTimes(1);
   });
 
@@ -245,6 +245,8 @@ describe("shopping HTTP route", () => {
       skippedPantryIngredients: ["Hakket oksekød"],
       items: [],
     });
+    expect(empty).not.toHaveProperty("grandTotal");
+    expect(empty.priceSummary.matchedPurchaseSubtotal).toBe(0);
     expect(batch).not.toHaveBeenCalled();
     const included = await (await request({ recipeNames: ["Chili"], excludePantry: false })).json();
     expect(included.items).toHaveLength(1);

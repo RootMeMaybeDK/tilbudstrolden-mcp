@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { z } from "zod";
+import type { HouseholdHttpResponse, PantryHttpResponse } from "../contracts/http.js";
 import { updateHouseholdSettings } from "../services/household-service.js";
 import { updatePantryItems } from "../services/pantry-service.js";
 import { getHousehold, getPantry } from "../store.js";
@@ -34,7 +35,9 @@ const pantryPatch = z.object({
 });
 
 export function registerHouseholdRoutes(app: Hono): void {
-  app.get("/api/household", async (c) => c.json(await getHousehold()));
+  app.get("/api/household", async (c) =>
+    c.json((await getHousehold()) satisfies HouseholdHttpResponse),
+  );
   app.patch("/api/household", async (c) => {
     const result = await updateHouseholdSettings(await parseJsonBody(c, householdPatch));
     if (result.status === "invalid-country") {
@@ -46,11 +49,13 @@ export function registerHouseholdRoutes(app: Hono): void {
         400,
       );
     }
-    return c.json(result.household);
+    return c.json(result.household satisfies HouseholdHttpResponse);
   });
-  app.get("/api/pantry", async (c) => c.json({ items: await getPantry() }));
+  app.get("/api/pantry", async (c) =>
+    c.json({ items: await getPantry() } satisfies PantryHttpResponse),
+  );
   app.patch("/api/pantry", async (c) => {
     const result = await updatePantryItems(await parseJsonBody(c, pantryPatch));
-    return c.json({ items: result.pantry });
+    return c.json({ items: result.pantry } satisfies PantryHttpResponse);
   });
 }

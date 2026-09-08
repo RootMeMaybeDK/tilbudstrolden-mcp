@@ -1,5 +1,10 @@
 import type { Hono } from "hono";
 import { z } from "zod";
+import type {
+  RecipesHttpResponse,
+  RemoveRecipeHttpResponse,
+  SaveRecipeHttpResponse,
+} from "../contracts/http.js";
 import { removeRecipeByName, saveRecipe } from "../services/recipe-service.js";
 import { getRecipes } from "../store.js";
 import { errorBody, parseJsonBody } from "./errors.js";
@@ -21,10 +26,12 @@ const recipeInput = z.object({
 });
 
 export function registerRecipeRoutes(app: Hono): void {
-  app.get("/api/recipes", async (c) => c.json({ recipes: await getRecipes() }));
+  app.get("/api/recipes", async (c) =>
+    c.json({ recipes: await getRecipes() } satisfies RecipesHttpResponse),
+  );
   app.post("/api/recipes", async (c) => {
     const result = await saveRecipe(await parseJsonBody(c, recipeInput));
-    return c.json(result, 200);
+    return c.json(result satisfies SaveRecipeHttpResponse, 200);
   });
   app.delete("/api/recipes/:name", async (c) => {
     // Hono decodes the path parameter once; a second decode would corrupt literal percent sequences.
@@ -32,6 +39,6 @@ export function registerRecipeRoutes(app: Hono): void {
     if (result.status === "not-found") {
       return c.json(errorBody("RECIPE_NOT_FOUND", "Recipe not found."), 404);
     }
-    return c.json(result);
+    return c.json(result satisfies RemoveRecipeHttpResponse);
   });
 }

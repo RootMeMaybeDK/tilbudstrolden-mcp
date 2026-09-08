@@ -1,6 +1,11 @@
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getStoreOffers, searchDeals } from "../api.js";
+import type {
+  DealSearchHttpResponse,
+  StoreOffersHttpResponse,
+  StoresHttpResponse,
+} from "../contracts/http.js";
 import { getLocale } from "../locales.js";
 import { getHousehold } from "../store.js";
 import { errorBody, parseJsonBody } from "./errors.js";
@@ -19,7 +24,7 @@ export function registerDealRoutes(app: Hono): void {
       country: locale.country,
       source: "known-stores",
       knownStores: locale.knownStores,
-    });
+    } satisfies StoresHttpResponse);
   });
   app.post("/api/deals/search", async (c) => {
     const input = await parseJsonBody(c, searchInput);
@@ -30,13 +35,16 @@ export function registerDealRoutes(app: Hono): void {
       country: locale.country,
       currency: locale.currency,
       offers,
-    });
+    } satisfies DealSearchHttpResponse);
   });
   app.get("/api/stores/:dealerId/offers", async (c) => {
     const parsed = offerLimit.safeParse(c.req.query("limit"));
     if (!parsed.success)
       return c.json(errorBody("INVALID_REQUEST", "limit must be an integer from 1 to 100."), 400);
     const dealerId = c.req.param("dealerId");
-    return c.json({ dealerId, offers: await getStoreOffers(dealerId, parsed.data) });
+    return c.json({
+      dealerId,
+      offers: await getStoreOffers(dealerId, parsed.data),
+    } satisfies StoreOffersHttpResponse);
   });
 }

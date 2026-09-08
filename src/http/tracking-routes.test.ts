@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { HTTP_BASE, jsonRequest, useHttpDatastore } from "../../test/http-fixtures.js";
+import { readSpendHistory } from "../services/tracking-service.js";
 import * as store from "../store.js";
 import { createHttpApp } from "./app.js";
+import { spendHistoryDto } from "./dto.js";
 
 describe("tracking HTTP routes", () => {
   useHttpDatastore();
@@ -72,6 +74,30 @@ describe("tracking HTTP routes", () => {
     const res = await request("/api/spend-log?weeks=0");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ weeks: 0, total: 20, averagePerWeek: null });
+    const serviceResult = await readSpendHistory(0);
+    expect(serviceResult).toMatchObject({ averagePerWeek: Number.POSITIVE_INFINITY });
+    expect(spendHistoryDto(serviceResult)).toMatchObject({ averagePerWeek: null });
+    expect(serviceResult).toMatchObject({ averagePerWeek: Number.POSITIVE_INFINITY });
+  });
+
+  it.each([
+    0,
+    20.75,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.NaN,
+  ])("preserves existing JSON serialization for service average %s without mutation", (averagePerWeek) => {
+    const result = {
+      status: "ready" as const,
+      weeks: 0,
+      entries: [],
+      total: 20,
+      averagePerWeek,
+      currency: "DKK",
+      currencySymbol: "kr",
+    };
+    expect(JSON.stringify(spendHistoryDto(result))).toBe(JSON.stringify(result));
+    expect(Object.is(result.averagePerWeek, averagePerWeek)).toBe(true);
   });
 
   it("rejects invalid wire types and lookbacks without writes", async () => {
