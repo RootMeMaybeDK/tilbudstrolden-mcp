@@ -13,7 +13,7 @@ TILBUDSTROLDEN_DATA=/absolute/path/to/tilbudstrolden.json npm run http:start
 
 For development use `npm run http:dev` with the same environment variable. Select the existing authoritative datastore explicitly; use a separate temporary datastore for experiments. The HTTP entrypoint refuses a missing or relative path. The underlying store retains its existing first-run behavior if the selected file does not exist.
 
-The listener binds **only to `127.0.0.1:3000`**. `HOST` and `PORT` environment variables do not override this. The app factory (`src/http/app.ts`) opens no listener; `src/http/server.ts` owns the listener. No HTTP daemon, systemd unit, reverse proxy, Nginx configuration, LAN exposure, TLS, authentication, or frontend is included.
+The listener binds **only to `127.0.0.1:3000`**. `HOST` and `PORT` environment variables do not override this. The app factory (`src/http/app.ts`) opens no listener; `src/http/server.ts` owns the listener. No HTTP daemon, systemd unit, deployment reverse proxy, Nginx configuration, LAN exposure, TLS or authentication is included. The separate [local web foundation](web.md) uses a guarded Vite development proxy; the backend does not serve frontend assets.
 
 Requests must target `127.0.0.1:3000` or `localhost:3000`. If an Origin header is present, it must equal the target origin. Cross-site browser requests are rejected. CORS is not enabled. These guards do **not** authenticate local processes and do not make the API safe for LAN exposure. A future GUI should use a deliberate same-origin setup; arbitrary development-server origins are not permitted.
 

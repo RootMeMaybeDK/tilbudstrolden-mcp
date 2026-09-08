@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    include: ["src/**/*.test.ts"],
     coverage: {
       provider: "v8",
       // Report on every source file, not just the ones a test happened to import.

@@ -32,6 +32,6 @@
     "lineWidth": 100
   },
   "files": {
-    "includes": ["src/**"]
+    "includes": ["src/**", "web/**", "!web/dist/**"]
   }
 }
