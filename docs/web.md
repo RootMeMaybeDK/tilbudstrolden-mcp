@@ -1,8 +1,9 @@
 # Local web foundation
 
-The first GUI increment is a React/TypeScript/Vite shell with placeholder routes. It does not
-implement domain workflows. The only startup request is `GET /api/health`, which does not access
-the datastore. React Router runs in declarative mode; there is no global state or query framework.
+The GUI is a React/TypeScript/Vite shell with a read-only household settings page and placeholder
+routes for the remaining domains. The shell makes one `GET /api/health` request, which does not
+access the datastore. Visiting `/settings` also reads `GET /api/household`. React Router runs in
+declarative mode; there is no global state or query framework.
 
 ## Development
 
@@ -41,6 +42,11 @@ Port 5173 is fixed (`strictPort`) so the guard cannot silently drift to another 
   out after five seconds and is cancelled on unmount. Navigation does not repeat the check.
 - `web/src/layout/AppShell.tsx`: sidebar, responsive two-column mobile navigation, connection state.
 - `web/src/pages/PlaceholderPage.tsx`: titles only; no synthetic or real domain data.
+- `web/src/api/household.ts`: typed relative household GET using `HouseholdHttpResponse`.
+- `web/src/hooks/useHousehold.ts`: loading/success/ApiError state for one GET per settings mount,
+  cancelled on unmount; late completions are ignored. No polling, caching or automatic retry.
+- `web/src/pages/SettingsPage.tsx`: read-only defaults, people, individual restrictions and
+  schedules, and preferred stores. No forms or mutation requests. Empty lists are explicit.
 - `web/src/components/States.tsx`: reusable loading, error and empty states.
 - `web/src/styles/base.css`: light-mode tokens, visible focus, semantic layout, no UI framework.
 
@@ -92,8 +98,22 @@ listeners with an isolated fake upstream: it never connects to the actual backen
 It may need permission to bind loopback sockets in a restricted sandbox. Shared planning union
 narrowing is checked by `web:typecheck`, not just transpiled by Vitest.
 
-## Next increment
+## Household settings
 
-Recommended next commit: `feat: add read-only household settings view`. Replace only the settings
-placeholder with typed `GET /api/household`, loading/error/empty handling and real household/store
-identity display. Keep editing, spend submission and other domain pages for later commits.
+The page presents country and default servings without inferring a household size. Store names,
+dealer IDs, priorities, duplicates and array order are preserved; there is no store lookup or
+normalization. Restrictions belong to each person, not a fabricated household-level list.
+Weekdays use Danish labels, with explicit Hjemme / Ikke hjemme text. Missing days are unknown
+(Ikke angivet); an empty schedule stays empty. Non-standard schedule keys are shown unchanged.
+
+Settings uses the existing loading/error announcements and shared API timeout. Errors show a
+message, never the error's stack/result object. There is no retry button; leaving and returning
+to the route starts a fresh GET. It does not repeat the shell health request.
+
+Automated settings tests mock fetch and never use a datastore. For a read-only local smoke test,
+start the backend with the explicitly selected existing datastore, open `/settings`, and navigate
+away/back at desktop and mobile sizes. Only health/household GETs are needed. Stop temporary
+servers afterwards; do not call recipe seeding or mutation endpoints during this check.
+
+Recommended next slice: a read-only pantry view using the same small state/effect pattern.
+Keep editing, spend submission and more complex planning flows for later commits.

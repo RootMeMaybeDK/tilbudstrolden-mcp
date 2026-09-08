@@ -2,13 +2,22 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import type { HouseholdHttpResponse } from "../../src/contracts/http";
 import { App } from "./App";
 import { pages } from "./layout/AppShell";
 
 function start(path = "/") {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockResolvedValue(Response.json({ status: "ok", service: "tilbudstrolden" }));
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+    if (url === "/api/health") return Response.json({ status: "ok", service: "tilbudstrolden" });
+    if (url === "/api/household")
+      return Response.json({
+        country: "DK",
+        defaultServings: 2,
+        people: [],
+        stores: [],
+      } satisfies HouseholdHttpResponse);
+    throw new Error(`Unexpected request: ${url}`);
+  });
   vi.stubGlobal("fetch", fetchMock);
   render(
     <MemoryRouter initialEntries={[path]}>
@@ -44,9 +53,34 @@ describe("application foundation", () => {
   });
 
   it.each(pages)("supports direct navigation to $path", async ({ path, title }) => {
-    start(path);
+    const fetchMock = start(path);
     expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
     await screen.findByText("Backend forbundet");
+    if (path === "/settings") await screen.findByText("Ingen personer angivet.");
+    else expect(screen.getByText(/Denne side er endnu ikke bygget/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(path === "/settings" ? 2 : 1);
+  });
+
+  it("loads household on settings navigation and remount without repeating health", async () => {
+    const user = userEvent.setup();
+    const fetchMock = start();
+    await screen.findByText("Backend forbundet");
+    await user.click(screen.getByRole("link", { name: "Indstillinger" }));
+    await screen.findByText("Ingen personer angivet.");
+    expect(screen.getByRole("link", { name: "Indstillinger" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(document.title).toBe("Indstillinger · Tilbudstrolden");
+    await user.click(screen.getByRole("link", { name: "Overblik" }));
+    expect(document.title).toBe("Overblik · Tilbudstrolden");
+    await user.click(screen.getByRole("link", { name: "Indstillinger" }));
+    await screen.findByText("Ingen personer angivet.");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/health",
+      "/api/household",
+      "/api/household",
+    ]);
   });
 
   it("offers a home link for unknown routes", async () => {
