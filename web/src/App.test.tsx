@@ -2,13 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import type { HouseholdHttpResponse } from "../../src/contracts/http";
+import type { HouseholdHttpResponse, PantryHttpResponse } from "../../src/contracts/http";
 import { App } from "./App";
 import { pages } from "./layout/AppShell";
 
 function start(path = "/") {
   const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
     if (url === "/api/health") return Response.json({ status: "ok", service: "tilbudstrolden" });
+    if (url === "/api/pantry") return Response.json({ items: [] } satisfies PantryHttpResponse);
     if (url === "/api/household")
       return Response.json({
         country: "DK",
@@ -54,11 +55,14 @@ describe("application foundation", () => {
 
   it.each(pages)("supports direct navigation to $path", async ({ path, title }) => {
     const fetchMock = start(path);
-    expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: path === "/pantry" ? "Pantry" : title }),
+    ).toBeInTheDocument();
     await screen.findByText("Backend forbundet");
     if (path === "/settings") await screen.findByText("Ingen personer angivet.");
+    else if (path === "/pantry") await screen.findByText("Ingen varer i pantry.");
     else expect(screen.getByText(/Denne side er endnu ikke bygget/)).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(path === "/settings" ? 2 : 1);
+    expect(fetchMock).toHaveBeenCalledTimes(path === "/settings" || path === "/pantry" ? 2 : 1);
   });
 
   it("loads household on settings navigation and remount without repeating health", async () => {
@@ -81,6 +85,44 @@ describe("application foundation", () => {
       "/api/household",
       "/api/household",
     ]);
+  });
+
+  it("loads pantry on navigation and remount without repeating health", async () => {
+    const user = userEvent.setup();
+    const fetchMock = start();
+    await screen.findByText("Backend forbundet");
+    await user.click(screen.getByRole("link", { name: "Basislager" }));
+    await screen.findByText("Ingen varer i pantry.");
+    expect(screen.getByRole("link", { name: "Basislager" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(document.title).toBe("Pantry · Tilbudstrolden");
+    await user.click(screen.getByRole("link", { name: "Overblik" }));
+    expect(document.title).toBe("Overblik · Tilbudstrolden");
+    await user.click(screen.getByRole("link", { name: "Basislager" }));
+    await screen.findByText("Ingen varer i pantry.");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/health",
+      "/api/pantry",
+      "/api/pantry",
+    ]);
+  });
+
+  it("keeps health and navigation usable when pantry fails", async () => {
+    const user = userEvent.setup();
+    const fetchMock = start();
+    await screen.findByText("Backend forbundet");
+    fetchMock.mockImplementation(async (url) => {
+      if (url !== "/api/pantry") throw new Error(`Unexpected request: ${url}`);
+      return Response.json({ error: { message: "Pantry er utilgængeligt." } }, { status: 500 });
+    });
+    await user.click(screen.getByRole("link", { name: "Basislager" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Pantry er utilgængeligt.");
+    expect(screen.getByText("Backend forbundet")).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Overblik" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/health", "/api/pantry"]);
   });
 
   it("offers a home link for unknown routes", async () => {

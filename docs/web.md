@@ -1,8 +1,8 @@
 # Local web foundation
 
-The GUI is a React/TypeScript/Vite shell with a read-only household settings page and placeholder
+The GUI is a React/TypeScript/Vite shell with read-only household settings and pantry pages and placeholder
 routes for the remaining domains. The shell makes one `GET /api/health` request, which does not
-access the datastore. Visiting `/settings` also reads `GET /api/household`. React Router runs in
+access the datastore. Visiting `/settings` reads `GET /api/household`; `/pantry` reads `GET /api/pantry`. React Router runs in
 declarative mode; there is no global state or query framework.
 
 ## Development
@@ -47,6 +47,8 @@ Port 5173 is fixed (`strictPort`) so the guard cannot silently drift to another 
   cancelled on unmount; late completions are ignored. No polling, caching or automatic retry.
 - `web/src/pages/SettingsPage.tsx`: read-only defaults, people, individual restrictions and
   schedules, and preferred stores. No forms or mutation requests. Empty lists are explicit.
+- `web/src/api/pantry.ts`, `web/src/hooks/usePantry.ts`, `web/src/pages/PantryPage.tsx`: typed
+  pantry GET, domain-specific request state and read-only list using `PantryHttpResponse`.
 - `web/src/components/States.tsx`: reusable loading, error and empty states.
 - `web/src/styles/base.css`: light-mode tokens, visible focus, semantic layout, no UI framework.
 
@@ -115,5 +117,26 @@ start the backend with the explicitly selected existing datastore, open `/settin
 away/back at desktop and mobile sizes. Only health/household GETs are needed. Stop temporary
 servers afterwards; do not call recipe seeding or mutation endpoints during this check.
 
-Recommended next slice: a read-only pantry view using the same small state/effect pattern.
+## Pantry
+
+The pantry contract provides only `items: string[]`. The page displays item names and the number
+of entries, not quantities, categories, prices or inferred inventory. Backend order, casing,
+duplicates and non-blank whitespace are preserved. Empty/whitespace-only entries display
+"Ikke angivet" as presentation only; the response is not transformed or written back.
+An empty array has an explicit empty state. Index keys reflect an immutable read-only snapshot
+with no stable IDs; revisit before editing, reordering or delete animations.
+
+`usePantry` follows `useHousehold` with a small independent domain hook, not a generic query
+abstraction. It makes one GET per mount, aborts on unmount and ignores late completions. There
+is no polling, caching or retry. Navigation away/back starts a new pantry GET, not another health
+request. Loading/error announcements and timeout handling reuse the foundation. The document
+title is `Pantry · Tilbudstrolden`. The semantic list uses a fluid grid and wraps long names.
+
+Tests use synthetic fetch responses, including raw-string quirks, cleanup and late completion,
+navigation/remount and isolated pantry failure while health/navigation remain available. For a
+read-only transport smoke, start the existing backend with the explicitly selected datastore and
+Vite as above, then GET `http://127.0.0.1:5173/api/pantry`. Do not call mutation endpoints. Stop
+temporary servers afterwards. Transport success does not substitute for a visual browser check.
+
+Recommended next slice: a read-only recipe library using the same domain-specific pattern.
 Keep editing, spend submission and more complex planning flows for later commits.

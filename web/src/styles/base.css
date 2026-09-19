@@ -173,6 +173,20 @@ h1 {
   color: var(--accent);
   font-weight: 650;
 }
+.pantry-page {
+  overflow-wrap: anywhere;
+}
+.pantry-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--space-1) var(--space-4);
+  padding-left: var(--space-3);
+  margin: var(--space-3) 0 0;
+}
+.pantry-list li {
+  min-width: 0;
+  white-space: pre-wrap;
+}
 .skip-link {
   position: fixed;
   top: -10rem;
