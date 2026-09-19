@@ -187,6 +187,86 @@ h1 {
   min-width: 0;
   white-space: pre-wrap;
 }
+.meal-plan-page {
+  overflow-wrap: anywhere;
+}
+.plan-inputs,
+.plan-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--space-3);
+}
+.plan-inputs label {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+.plan-inputs input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+}
+.plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.plan-actions button {
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--surface);
+  background: var(--accent);
+  cursor: pointer;
+}
+.plan-actions button[type="button"] {
+  color: var(--accent);
+  background: var(--surface);
+}
+.plan-actions button:disabled,
+.plan-inputs input:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.plan-inputs input:focus-visible,
+.plan-result h2:focus {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
+}
+.plan-result {
+  margin-top: var(--space-4);
+}
+.plan-facts {
+  display: grid;
+  gap: var(--space-1);
+}
+.plan-facts dt {
+  color: var(--muted);
+}
+.plan-facts dd {
+  margin: 0;
+}
+.plan-days {
+  padding-left: var(--space-3);
+}
+.plan-days > li {
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.plan-days h3 {
+  margin: 0;
+}
+.plan-recipe-name {
+  font-weight: 650;
+  white-space: pre-wrap;
+}
 .skip-link {
   position: fixed;
   top: -10rem;

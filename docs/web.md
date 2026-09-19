@@ -1,9 +1,11 @@
 # Local web foundation
 
-The GUI is a React/TypeScript/Vite shell with read-only household settings and pantry pages and placeholder
-routes for the remaining domains. The shell makes one `GET /api/health` request, which does not
-access the datastore. Visiting `/settings` reads `GET /api/household`; `/pantry` reads `GET /api/pantry`. React Router runs in
-declarative mode; there is no global state or query framework.
+The GUI is a React/TypeScript/Vite shell with read-only household settings and pantry pages,
+and user-triggered meal plan generation. Other domains remain placeholders. The shell makes one
+`GET /api/health` request, which does not access the datastore. Visiting `/settings` reads
+`GET /api/household`; `/pantry` reads `GET /api/pantry`. `/plan` starts idle and only calls
+`POST /api/plan-and-shop` after submission. React Router runs in declarative mode; there is no
+global state or query framework.
 
 ## Development
 
@@ -138,5 +140,48 @@ read-only transport smoke, start the existing backend with the explicitly select
 Vite as above, then GET `http://127.0.0.1:5173/api/pantry`. Do not call mutation endpoints. Stop
 temporary servers afterwards. Transport success does not substitute for a visual browser check.
 
-Recommended next slice: a read-only recipe library using the same domain-specific pattern.
-Keep editing, spend submission and more complex planning flows for later commits.
+## Meal plan generation
+
+`api/planning.ts`, `hooks/useMealPlan.ts` and `pages/MealPlanPage.tsx` implement an explicit
+idle → loading → result/error flow. Days starts at the API's documented default of seven.
+This first GUI supports positive integer days from 1–7 (a UI scope limit, not an API limit).
+The HTTP schema itself accepts numbers without min/max/integer constraints. Optional people
+must be a positive safe integer in this UI; leaving it empty omits `people` entirely. Backend
+then uses household member count, falling back to default servings. The effective size is read
+from the response, not inferred by the browser. No shared request type exists, so the helper
+declares only its supported request subset: `days` and optional `people`.
+
+Advanced constraints are omitted: backend defaults remain maxPerProtein=2, maxPerCuisine=2,
+maxSlowDays=2, with no explicit exclusions, day constraints or cuisine preferences. The UI does
+not reimplement planning logic or promise that a valid plan always exists.
+
+Success uses the shared `PlanAndShopHttpResponse` success variant. HTTP 422 errors are decoded
+from `ApiError.result: unknown`, requiring a matching error code and runtime checks for the
+status, days and available recipe count where applicable. The guard narrows only `Pick` types
+for those consumed fields; it does not claim to validate the uninspected context/recipes.
+Insufficient recipes and no valid plan have separate Danish outcome messages. Other failures
+use the existing ErrorState; no result/stack object is rendered and no request is retried.
+
+Plan days keep response order and day indices, with recipe names, effective people/days,
+matched-deal estimates, shared-ingredient estimate savings and unique matched ingredient count.
+Per-recipe counts distinguish confirmed, uncertain and unpriced ingredients. These are partial
+matched-deal estimates, not a full food budget or checkout price. Unmatched-only recipes show
+that no matched prices are available. Nested shopping is not rendered in this slice.
+
+Submit and inputs are disabled while pending, backed by a synchronous in-flight guard.
+Cancel aborts the browser request and permits another explicit submission; the backend may
+finish computation after browser cancellation. Request identity and abort checks prevent stale
+successes/errors/finalizers from affecting a later request. Navigation aborts on unmount and
+returns to a fresh idle page. Health is not refetched. There is no plan storage, approval, history
+write or shopping page. Result/error headings receive focus; loading/outcomes are announced.
+
+Tests cover input validation, exact POST bodies, 422 narrowing (including malformed envelopes),
+price wording, double submit, cancellation, stale results/errors and navigation. They use mocked
+fetch with synthetic contract fixtures. A local compute smoke may POST a small plan through
+Vite after checking datastore contents: DK recipe reads can seed an empty library, so use an
+existing non-empty library for the read-only smoke. Compare the datastore checksum before/after
+and stop temporary servers. A browser is optional; transport checks do not validate visual layout.
+
+Recommended next slice: display the generated plan's structured shopping result in a read-only
+shopping view, with deliberate state handoff. Keep plan persistence, approval and dish replacement
+for later commits.

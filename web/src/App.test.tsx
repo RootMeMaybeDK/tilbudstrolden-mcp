@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -61,6 +61,8 @@ describe("application foundation", () => {
     await screen.findByText("Backend forbundet");
     if (path === "/settings") await screen.findByText("Ingen personer angivet.");
     else if (path === "/pantry") await screen.findByText("Ingen varer i pantry.");
+    else if (path === "/plan")
+      expect(screen.getByRole("button", { name: "Generér madplan" })).toBeEnabled();
     else expect(screen.getByText(/Denne side er endnu ikke bygget/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(path === "/settings" || path === "/pantry" ? 2 : 1);
   });
@@ -123,6 +125,34 @@ describe("application foundation", () => {
     await user.click(screen.getByRole("link", { name: "Overblik" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/health", "/api/pantry"]);
+  });
+
+  it("cancels planning on navigation and returns idle without refetching health", async () => {
+    const user = userEvent.setup();
+    const fetchMock = start("/plan");
+    await screen.findByText("Backend forbundet");
+    let finish: ((response: Response) => void) | undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await user.click(screen.getByRole("button", { name: "Generér madplan" }));
+    const signal = fetchMock.mock.calls[1]?.[1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    await user.click(screen.getByRole("link", { name: "Indkøb" }));
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByText(/Denne side er endnu ikke bygget/)).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Madplan" }));
+    expect(screen.getByRole("button", { name: "Generér madplan" })).toBeEnabled();
+    expect(screen.getByText(/Vælg antal dage og generér/)).toBeInTheDocument();
+    await act(async () =>
+      finish?.(Response.json({ error: { message: "Late planning failure" } }, { status: 500 })),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("Backend forbundet")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/health", "/api/plan-and-shop"]);
   });
 
   it("offers a home link for unknown routes", async () => {

@@ -1,5 +1,6 @@
 import { Link, Route, Routes } from "react-router-dom";
 import { AppShell, pages } from "./layout/AppShell";
+import { MealPlanPage } from "./pages/MealPlanPage";
 import { PantryPage } from "./pages/PantryPage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -17,6 +18,8 @@ export function App() {
                 <SettingsPage />
               ) : path === "/pantry" ? (
                 <PantryPage />
+              ) : path === "/plan" ? (
+                <MealPlanPage />
               ) : (
                 <PlaceholderPage title={title} />
               )
